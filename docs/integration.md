@@ -68,3 +68,26 @@ Am saubersten wäre ein kleiner, gemeinsamer JSON-Austausch, der genau `Piece2D`
 2. Einen **Import**, der eine solche Datei einliest und die Stücke ins Canvas lädt (technisch fast identisch zum bestehenden "Laden"-Knopf der gespeicherten Konfigurationen, nur aus einer Datei statt aus `localStorage`).
 
 Die Stadthallen-Software könnte dann spiegelbildlich: ihre eigene Palette um "NivTec-Katalogstücke" (die Tabelle oben) erweitern, ein ausgewähltes Stück als `{x, y, w, d, corner?}` in ihren eigenen Metern-Plan einfügen, und umgekehrt eine solche NivTec-JSON-Datei importieren, um einen kompletten NivTec-Aufbau (Bühne oder Theke) als Gruppe von Stücken in die Gesamtplanung zu übernehmen.
+
+## Forex-Blenden (Kastenbühne)
+
+Die Kastenbühnen-Datei (`nivtec-kastenbuehne.json`) kann optional Forex-Blenden enthalten — bedruckte 5-mm-PVC-Hartschaumplatten vor freien Außenkanten. Ältere Dateien ohne das Feld laden unverändert.
+
+```ts
+interface KastenbuehneSavedState {
+  heightCm?: number
+  pieces: Piece2D[]
+  forexPanels?: ForexPanel[]
+}
+interface ForexPanel {
+  id: string                 // stabil, z. B. "fx-1"
+  pieceId: string            // Piece2D.id des Podests
+  side: 'top' | 'right' | 'bottom' | 'left' | 'hyp'  // Kante im Plan (y nach unten); 'hyp' = Schräge bei Dreiecken
+  thicknessMm?: number       // Standard 5
+  printGroup?: string        // gleiche Gruppe = ein Druck läuft über diese Platten
+}
+```
+
+- Beim Import werden ungültige Einträge verworfen: unbekannte `pieceId`, ungültige `side`, `'hyp'` bei Nicht-Dreiecken (auch Viertelkreis), eine Kante, die das Podest nicht hat (z. B. `'bottom'` bei Dreieck `corner: 'tl'`), doppelte `id` oder eine zweite Blende an derselben Kante.
+- Exportiert werden nur Blenden an Kanten, die im aktuellen Plan frei sind (kein Nachbarpodest liegt an). Druckbilder sind nie Teil der Datei.
+- Zuschnitt in der Materialliste: Kantenlänge × (Bauhöhe − 10 mm), z. B. „Forex 2000 × 590 mm, 5 mm“ bei 60 cm.

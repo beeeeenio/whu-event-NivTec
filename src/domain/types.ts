@@ -87,3 +87,22 @@ export interface MaterialListItem {
   menge: number;
   einheit: string;
 }
+
+/** Kante eines Podests im Plan (y nach unten): 'bottom' = Vorderkante (größtes y), 'hyp' = Schräge eines Dreiecks. */
+export type ForexSide = 'top' | 'right' | 'bottom' | 'left' | 'hyp';
+
+/**
+ * Forex-Blende: bedruckte PVC-Hartschaumplatte (Standard 5 mm) vor einer freien Außenkante eines
+ * Podests. Gemeinsames Austauschformat mit der Stadthallenplanung — Feldnamen nicht ändern.
+ */
+export interface ForexPanel {
+  /** Stabil, z. B. "fx-1". */
+  id: string;
+  /** Piece2D.id des Podests, an dessen Kante die Blende hängt. */
+  pieceId: string;
+  side: ForexSide;
+  /** Plattenstärke in mm, Standard 5. */
+  thicknessMm?: number;
+  /** Gleiche Gruppe = ein durchlaufender Druck über diese Platten. */
+  printGroup?: string;
+}
