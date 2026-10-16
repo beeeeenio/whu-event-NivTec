@@ -975,7 +975,7 @@ export function PieceCanvasEditor({
         }
         const valid = checkGroupMove(pieces, selectedIds, dx, dy, blockers) === 'ok';
         if (cur.moved && cur.group.dx === dx && cur.group.dy === dy && cur.group.valid === valid) return;
-        if (!cur.moved) announce(`${selectedIds.length} Stücke aufgenommen. Loslassen legt ab, Esc bricht ab.`);
+        if (!cur.moved) announce(`${stueckeText(selectedIds.length)} aufgenommen. Loslassen legt ab, Esc bricht ab.`);
         next = { ...cur, moved: true, group: { ...cur.group, dx, dy, valid } };
       } else {
         // Mit gedrehten Maßen rechnen (Drehen während des Ziehens, siehe rotateDraggedPiece).
@@ -1474,6 +1474,7 @@ export function PieceCanvasEditor({
         setMoveMode(false);
         return;
       }
+      if (armed) announce('Werkzeug abgebrochen.');
       arm(null);
       return;
     }
@@ -1834,11 +1835,14 @@ export function PieceCanvasEditor({
           </>
         }
       />
-      {blockedMessage && (
-        <div role="status" aria-live="assertive" className="rounded-md border border-[var(--color-danger)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-danger)]">
-          {blockedMessage}
-        </div>
-      )}
+      {/* Live-Region bleibt immer im DOM, sonst kündigen Screenreader die erst eingefügte Meldung oft nicht an. */}
+      <div aria-live="assertive" aria-atomic="true">
+        {blockedMessage && (
+          <div className="rounded-md border border-[var(--color-danger)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-danger)]">
+            {blockedMessage}
+          </div>
+        )}
+      </div>
       {clearedSnack && pieces.length === 0 && (
         <div role="status" className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm">
           Plan geleert
