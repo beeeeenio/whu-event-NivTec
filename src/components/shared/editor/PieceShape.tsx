@@ -28,6 +28,7 @@ export function PieceShape({
   onPointerUp,
   onPointerCancel,
   onLostPointerCapture,
+  dataPiece,
   children,
 }: {
   piece: ShapeGeometry;
@@ -43,9 +44,12 @@ export function PieceShape({
   onPointerUp?: (e: React.PointerEvent<SVGElement>) => void;
   onPointerCancel?: (e: React.PointerEvent<SVGElement>) => void;
   onLostPointerCapture?: (e: React.PointerEvent<SVGElement>) => void;
+  /** Markiert ein platziertes Stück im DOM (data-pce-piece), damit Touch-Gesten am Plan es erkennen. */
+  dataPiece?: boolean;
   children?: React.ReactNode;
 }) {
   const shared = {
+    'data-pce-piece': dataPiece ? '1' : undefined,
     fill,
     fillOpacity,
     stroke,

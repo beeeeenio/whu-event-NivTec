@@ -26,7 +26,7 @@ import { mirrorPayload, payloadMatches, payloadSize, payloadToFilled, rotatePayl
 import { formatMeters } from '../../lib/format';
 import { dragThresholdPx, isPrimaryButton, shouldRotateOnWheel, wheelIntent } from '../../lib/pointer';
 import { createFrameThrottle } from '../../lib/pointerDrag';
-import { panBy, viewBoxToString, zoomAt, zoomLevel, type ViewBox } from '../../lib/viewport';
+import { panBy, pinchFactor, touchGestureIntent, viewBoxToString, zoomAt, zoomLevel, type ViewBox } from '../../lib/viewport';
 import { editorShortcut, isEditableTarget } from '../../lib/shortcuts';
 import { CanvasGrid } from './editor/CanvasGrid';
 import { DragOverlay } from './editor/DragOverlay';
@@ -99,6 +99,20 @@ const ARROW_DELTA: Partial<Record<string, [number, number]>> = {
 function metersPerPxOf(svg: SVGSVGElement | null): number {
   const ctm = svg?.getScreenCTM();
   return ctm && ctm.a ? 1 / ctm.a : 0.02;
+}
+
+/** Zwei-Finger-Geste, deren Abstand sich kaum ändert (|Faktor - 1| < 0,02), scrollt die Seite statt zu zoomen. */
+const PINCH_SCROLL_TOLERANCE = 0.02;
+/** Bewegung in Bildschirm-px, ab der ein Finger auf leerer Fläche als Wischen statt als Tippen gilt. */
+const TAP_SLOP_PX = 10;
+
+/** Die ersten beiden aktiven Berührungspunkte (Einfüge-Reihenfolge der Map), sonst null. */
+function firstTwoTouches(points: Map<number, { x: number; y: number }>): [{ x: number; y: number }, { x: number; y: number }] | null {
+  const it = points.values();
+  const a = it.next();
+  const b = it.next();
+  if (a.done || b.done) return null;
+  return [a.value, b.value];
 }
 
 function round1(v: number): number {
@@ -683,6 +697,126 @@ export function PieceCanvasEditor({
   );
   const panHandlers = panDrag.bind(null);
 
+  // Touch-Gesten am Plan (Entscheidung je Berührung in touchGestureIntent): aktive Berührungspunkte
+  // (pointerId → Position in client-px), laufende Zwei-Finger-Geste und Wischen auf leerer Fläche.
+  // touch-action bleibt am svg auf none, daher scrollt die Seite hier selbst über window.
+  const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<{ dist: number; mid: { x: number; y: number }; cumFactor: number; zoomed: boolean } | null>(null);
+  const touchScrollRef = useRef<{ id: number; lastX: number; lastY: number; startX: number; startY: number } | null>(null);
+
+  // Abstand und Mittelpunkt der ersten beiden Finger neu merken (bei Start und wenn sich das Fingerpaar ändert).
+  function resetPinchReference() {
+    const pinch = pinchRef.current;
+    const pair = firstTwoTouches(touchPointsRef.current);
+    if (!pinch || !pair) return;
+    const [a, b] = pair;
+    pinch.dist = Math.hypot(b.x - a.x, b.y - a.y);
+    pinch.mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  }
+
+  // Zwei Finger: zoomen zum Mittelpunkt und mit ihm verschieben; ohne Zoom und ohne Spreizen scrollt die Seite.
+  function handlePinchMove() {
+    const pinch = pinchRef.current;
+    const pair = firstTwoTouches(touchPointsRef.current);
+    if (!pinch || !pair) return;
+    const [a, b] = pair;
+    const dist = Math.hypot(b.x - a.x, b.y - a.y);
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const factor = pinchFactor(pinch.dist, dist);
+    const dxMid = mid.x - pinch.mid.x;
+    const dyMid = mid.y - pinch.mid.y;
+    pinch.dist = dist;
+    pinch.mid = mid;
+    pinch.cumFactor *= factor;
+    if (factor === 1 && dxMid === 0 && dyMid === 0) return;
+    if (!pinch.zoomed && Math.abs(pinch.cumFactor - 1) < PINCH_SCROLL_TOLERANCE) {
+      window.scrollBy(-dxMid, -dyMid);
+      return;
+    }
+    pinch.zoomed = true;
+    const k = metersPerPxOf(svgRef.current);
+    const focus = svgPointFromClient(mid.x, mid.y);
+    setView((v) => panBy(zoomAt(v ?? baseView, baseView, factor, focus), -dxMid * k, -dyMid * k));
+  }
+
+  function handleTouchDown(e: React.PointerEvent<SVGSVGElement>) {
+    touchPointsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const onPiece = (e.target as Element).closest('[data-pce-piece]') !== null;
+    const intent = touchGestureIntent({
+      touchCount: touchPointsRef.current.size,
+      onPiece,
+      armed: !!armed,
+      zoomed: view !== null,
+    });
+    if (intent === 'pinch') {
+      // Der zweite Finger darf nicht den Stück-Handler erreichen, und ein laufendes Ziehen bricht ab.
+      e.stopPropagation();
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // best-effort, siehe usePointerDrag
+      }
+      if (!pinchRef.current) {
+        pieceDrag.cancel();
+        panDrag.cancel();
+        touchScrollRef.current = null;
+        pinchRef.current = { dist: 0, mid: { x: 0, y: 0 }, cumFactor: 1, zoomed: view !== null };
+        setFrozenBase(baseView);
+      }
+      resetPinchReference();
+      return;
+    }
+    if (intent === 'page-scroll') {
+      touchScrollRef.current = { id: e.pointerId, lastX: e.clientX, lastY: e.clientY, startX: e.clientX, startY: e.clientY };
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // best-effort, siehe usePointerDrag
+      }
+    } else if (intent === 'pan-view') {
+      panHandlers.onPointerDown(e);
+    }
+    // 'piece' und 'none' bleiben beim bisherigen Verhalten (Stück-Handler bzw. Tippen beim Platzieren).
+  }
+
+  function handleTouchMove(e: React.PointerEvent<SVGSVGElement>) {
+    const point = touchPointsRef.current.get(e.pointerId);
+    if (point) {
+      point.x = e.clientX;
+      point.y = e.clientY;
+    }
+    if (pinchRef.current) {
+      handlePinchMove();
+      return;
+    }
+    const scroll = touchScrollRef.current;
+    if (scroll && scroll.id === e.pointerId) {
+      window.scrollBy(-(e.clientX - scroll.lastX), -(e.clientY - scroll.lastY));
+      scroll.lastX = e.clientX;
+      scroll.lastY = e.clientY;
+    }
+  }
+
+  function handleTouchEnd(e: React.PointerEvent<SVGSVGElement>, cancelled: boolean) {
+    const points = touchPointsRef.current;
+    points.delete(e.pointerId);
+    const scroll = touchScrollRef.current;
+    if (scroll && scroll.id === e.pointerId) {
+      touchScrollRef.current = null;
+      // Tippen ohne Bewegung auf leerer Fläche hebt die Auswahl auf.
+      const tap = Math.hypot(e.clientX - scroll.startX, e.clientY - scroll.startY) < TAP_SLOP_PX;
+      if (!cancelled && tap) setSelectedIds([]);
+    }
+    if (pinchRef.current) {
+      if (points.size < 2) {
+        pinchRef.current = null;
+        setFrozenBase(null);
+      } else {
+        resetPinchReference();
+      }
+    }
+  }
+
   // Zoomschalter: um die Mitte der aktuellen Ansicht zoomen.
   function zoomByButton(factor: number) {
     setView((v) => {
@@ -1046,6 +1180,11 @@ export function PieceCanvasEditor({
         tabIndex={0}
         onKeyDown={handleCanvasKeyDown}
         onPointerDownCapture={(e) => {
+          // Touch: eigene Entscheidung je Finger (Stück, Seite scrollen, Plan verschieben, zwei Finger).
+          if (e.pointerType === 'touch') {
+            handleTouchDown(e);
+            return;
+          }
           // Mittlere Taste oder Leertaste+links verschiebt den Plan. Die Capture-Phase fängt das vor den Stücken ab.
           const panStart = e.button === 1 || (spaceHeld && e.button === 0);
           if (!panStart) return;
@@ -1053,6 +1192,15 @@ export function PieceCanvasEditor({
           if (e.button === 1) e.preventDefault();
           e.stopPropagation();
           panHandlers.onPointerDown(e);
+        }}
+        onPointerMoveCapture={(e) => {
+          if (e.pointerType === 'touch') handleTouchMove(e);
+        }}
+        onPointerUpCapture={(e) => {
+          if (e.pointerType === 'touch') handleTouchEnd(e, false);
+        }}
+        onPointerCancelCapture={(e) => {
+          if (e.pointerType === 'touch') handleTouchEnd(e, true);
         }}
         onPointerMove={(e) => {
           lastPointerRef.current = svgPointFromClient(e.clientX, e.clientY);
@@ -1153,6 +1301,7 @@ export function PieceCanvasEditor({
               strokeWidth={selectedIds.includes(p.id) ? 0.035 : 0.02}
               pointerEvents={interactive ? 'all' : 'none'}
               style={{ cursor: interactive ? 'grab' : 'default' }}
+              dataPiece
               {...pieceDrag.bind(p)}
             >
               <title>
@@ -1188,7 +1337,7 @@ export function PieceCanvasEditor({
       )}
       </div>
 
-      <PiecePalette armed={armed} hint="Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil. Beim Ziehen zeigen Hilfslinien Fluchten, Abstände und das Gesamtmaß in m. Alt gedrückt halten: frei platzieren, ohne Einrasten." {...paletteCallbacks} />
+      <PiecePalette armed={armed} hint="Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil. Beim Ziehen zeigen Hilfslinien Fluchten, Abstände und das Gesamtmaß in m. Alt gedrückt halten: frei platzieren, ohne Einrasten. Auf dem Tablet: ein Finger auf freier Fläche scrollt die Seite, zwei Finger zoomen und verschieben den Plan." {...paletteCallbacks} />
 
       <ShortcutHelp />
     </div>

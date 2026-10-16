@@ -40,6 +40,7 @@ export const CanvasGrid = memo(function CanvasGrid({
         height={canvasDepthM + pad * 2}
         fill={`url(#pce-dotgrid-${uid})`}
         pointerEvents="none"
+        data-pce-bg="1"
       />
       {Array.from({ length: Math.floor(canvasWidthM) + 1 }, (_, i) => (
         <line key={`vmaj-${i}`} x1={i} y1={0} x2={i} y2={canvasDepthM} stroke="var(--color-grid-line-major)" strokeWidth={0.01} pointerEvents="none" />

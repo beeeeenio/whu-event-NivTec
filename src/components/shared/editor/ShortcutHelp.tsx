@@ -44,6 +44,9 @@ export function ShortcutHelp() {
           <kbd className="rounded border border-[var(--color-border)] px-1">Leertaste</kbd>+Ziehen bzw. mittlere Maustaste: Plan verschieben
         </li>
         <li>
+          Zwei Finger: zoomen und verschieben
+        </li>
+        <li>
           <kbd className="rounded border border-[var(--color-border)] px-1">0</kbd> ganzen Plan zeigen
         </li>
         <li>
