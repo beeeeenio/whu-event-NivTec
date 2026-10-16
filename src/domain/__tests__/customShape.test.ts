@@ -427,3 +427,15 @@ describe('normalizeToOrigin', () => {
     expect(b.panels).toEqual(a.panels);
   });
 });
+
+describe('findFreePosition snapToleranceM', () => {
+  const existing = [piece('a', 0, 0, 2, 0.75)];
+
+  it('rastet ohne options an die Kante des Nachbarn (Kantenfang 0,2 m)', () => {
+    expect(findFreePosition(existing, 2, 1, 0, 0.85)).toEqual({ x: 0, y: 0.75 });
+  });
+
+  it('rastet mit snapToleranceM 0.05 nicht mehr an die Kante, sondern aufs 0,5-m-Raster', () => {
+    expect(findFreePosition(existing, 2, 1, 0, 0.85, undefined, { snapToleranceM: 0.05 })).toEqual({ x: 0, y: 1 });
+  });
+});
