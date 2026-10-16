@@ -3,12 +3,16 @@ import { STRUCTURE_RULES } from './rules';
 import { isCatalogTriangleBox } from './panels';
 import { SPINDEL_HEIGHT_OPTIONS_CM } from './tresen';
 import { FOREX_SIDES, isTrianglePiece, pieceHasSide } from './forex';
+import { migratePlan, type PlanKind } from './migrations';
 import type { ForexPanel, ForexSide, PieceShape, TriangleCorner } from './types';
 
 /**
  * Gespeicherter Zustand einer Kastenbühne — wird als JSON exportiert/importiert.
  */
 export interface KastenbuehneSavedState {
+  /** Nur beim Schreiben gesetzt (siehe migrations.ts). Beim Lesen wird es nicht übernommen. */
+  schemaVersion?: number;
+  kind?: PlanKind;
   heightCm?: number;
   pieces: Piece2D[];
   /** Optional — ältere Dateien ohne Forex-Blenden laden weiter. */
@@ -19,6 +23,9 @@ export interface KastenbuehneSavedState {
  * Gespeicherter Zustand eines Tresens — wird als JSON exportiert/importiert.
  */
 export interface TresenSavedState {
+  /** Nur beim Schreiben gesetzt (siehe migrations.ts). Beim Lesen wird es nicht übernommen. */
+  schemaVersion?: number;
+  kind?: PlanKind;
   baseHeightCm?: number;
   spindelHeightCm?: number;
   basePieces: Piece2D[];
@@ -52,10 +59,14 @@ export function isValidPieceGeometry(p: unknown): p is Omit<Piece2D, 'id'> {
 
 /**
  * Bereinigt ein Array von Stücken — entfernt ungültige, reserviert bestehende IDs,
- * vergibt neue IDs für fehlende oder wiederholte.
+ * vergibt neue IDs für fehlende oder wiederholte. Liefert zusätzlich Zähler für den Import-Bericht.
  */
-export function sanitizePieces(raw: unknown): Piece2D[] {
-  if (!Array.isArray(raw)) return [];
+export function sanitizePiecesWithReport(raw: unknown): {
+  pieces: Piece2D[];
+  dropped: number;
+  reassignedIds: number;
+} {
+  if (!Array.isArray(raw)) return { pieces: [], dropped: 0, reassignedIds: 0 };
 
   // Zuerst alle gültigen Stücke filtern und ihre bestehenden IDs sammeln
   const validGeometries: { geom: Omit<Piece2D, 'id'>; rawId: unknown }[] = [];
@@ -77,6 +88,7 @@ export function sanitizePieces(raw: unknown): Piece2D[] {
   // Jetzt Stücke mit validen oder neuen IDs zusammensetzen
   const seenIds = new Set<string>();
   const result: Piece2D[] = [];
+  let reassignedIds = 0;
 
   for (const { geom, rawId } of validGeometries) {
     let id: string;
@@ -85,12 +97,18 @@ export function sanitizePieces(raw: unknown): Piece2D[] {
     } else {
       // Fehlende, nicht-String oder wiederholte ID
       id = makePieceId();
+      reassignedIds++;
     }
     seenIds.add(id);
     result.push({ ...geom, id });
   }
 
-  return result;
+  return { pieces: result, dropped: raw.length - validGeometries.length, reassignedIds };
+}
+
+/** Bereinigt ein Array von Stücken — wie sanitizePiecesWithReport, nur die Stücke. */
+export function sanitizePieces(raw: unknown): Piece2D[] {
+  return sanitizePiecesWithReport(raw).pieces;
 }
 
 /**
@@ -98,9 +116,13 @@ export function sanitizePieces(raw: unknown): Piece2D[] {
  * verworfen: fehlende/doppelte id, unbekannte pieceId, ungültige side, 'hyp' bei Nicht-Dreiecken,
  * eine Kante, die das Podest gar nicht hat (z. B. 'bottom' bei Dreieck 'tl'), oder eine zweite
  * Blende an derselben Kante. Ungültige optionale Felder fallen einzeln weg.
+ * Liefert zusätzlich die Anzahl verworfener Einträge für den Import-Bericht.
  */
-export function sanitizeForexPanels(raw: unknown, pieces: Piece2D[]): ForexPanel[] {
-  if (!Array.isArray(raw)) return [];
+export function sanitizeForexPanelsWithReport(
+  raw: unknown,
+  pieces: Piece2D[],
+): { panels: ForexPanel[]; dropped: number } {
+  if (!Array.isArray(raw)) return { panels: [], dropped: 0 };
   const piecesById = new Map(pieces.map((p) => [p.id, p]));
   const seenIds = new Set<string>();
   const seenEdges = new Set<string>();
@@ -131,10 +153,21 @@ export function sanitizeForexPanels(raw: unknown, pieces: Piece2D[]): ForexPanel
     seenEdges.add(edgeKey);
     result.push(panel);
   }
-  return result;
+  return { panels: result, dropped: raw.length - result.length };
 }
 
-export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
+/** Bereinigt Forex-Blenden gegen die Stücke — ohne Zähler. */
+export function sanitizeForexPanels(raw: unknown, pieces: Piece2D[]): ForexPanel[] {
+  return sanitizeForexPanelsWithReport(raw, pieces).panels;
+}
+
+/**
+ * Ergebnis eines Imports. `warnings` nennen nur tatsächlich verworfene oder neu vergebene Daten
+ * (kein Bericht bei sauberen Dateien). Migrationshinweise fließen bewusst nicht hier hinein.
+ */
+export type ParseResult<T> =
+  | { ok: true; value: T; warnings: string[] }
+  | { ok: false; error: string };
 
 /**
  * Validiert und parsed eine Kastenbühne-Datei — prüft ob sie wirklich eine Bühne ist
@@ -149,7 +182,22 @@ export function parseKastenbuehneFile(data: unknown): ParseResult<KastenbuehneSa
     };
   }
 
-  const obj = data as Record<string, unknown>;
+  const raw = data as Record<string, unknown>;
+
+  // Ältere Versionen auf die aktuelle Version heben (Kopie, Original bleibt unverändert)
+  const migrated = migratePlan(raw);
+  if (!migrated.ok) {
+    return { ok: false, error: migrated.error };
+  }
+  const obj = migrated.data;
+
+  // Explizit gesetzter kind passt nicht zur Bühne → klare Meldung
+  if (raw.kind === 'tresen') {
+    return {
+      ok: false,
+      error: 'Das ist ein Tresen-Plan — bitte im Tab „Tresen / Theken“ öffnen.',
+    };
+  }
 
   // Ist das vielleicht ein Tresen-Plan?
   if (!Array.isArray(obj.pieces) && (Array.isArray(obj.basePieces) || Array.isArray(obj.topPieces))) {
@@ -168,7 +216,15 @@ export function parseKastenbuehneFile(data: unknown): ParseResult<KastenbuehneSa
   }
 
   // pieces bereinigen
-  const pieces = sanitizePieces(obj.pieces);
+  const piecesReport = sanitizePiecesWithReport(obj.pieces);
+  const pieces = piecesReport.pieces;
+  const warnings: string[] = [];
+  if (piecesReport.dropped > 0) {
+    warnings.push(`${piecesReport.dropped} ungültige Stücke verworfen.`);
+  }
+  if (piecesReport.reassignedIds > 0) {
+    warnings.push(`${piecesReport.reassignedIds} doppelte oder fehlende Stück-IDs neu vergeben.`);
+  }
 
   // heightCm validieren, falls vorhanden
   let heightCm: number | undefined = undefined;
@@ -179,21 +235,23 @@ export function parseKastenbuehneFile(data: unknown): ParseResult<KastenbuehneSa
   }
 
   // Forex-Blenden nur übernehmen, wenn die Datei welche mitbringt (alte Dateien: Feld fehlt)
-  const forexPanels = 'forexPanels' in obj ? sanitizeForexPanels(obj.forexPanels, pieces) : undefined;
+  let forexPanels: ForexPanel[] | undefined = undefined;
+  if ('forexPanels' in obj) {
+    const forexReport = sanitizeForexPanelsWithReport(obj.forexPanels, pieces);
+    forexPanels = forexReport.panels;
+    if (forexReport.dropped > 0) {
+      warnings.push(`${forexReport.dropped} Forex-Blenden ohne passende Kante verworfen.`);
+    }
+  }
 
-  return { ok: true, value: { heightCm, pieces, forexPanels } };
+  return { ok: true, value: { heightCm, pieces, forexPanels }, warnings };
 }
 
 /**
  * Validiert und parsed eine Tresen-Datei — prüft ob sie wirklich ein Tresen ist
  * (nicht versehentlich eine Bühne), und ob sie die notwendigen Felder hat.
  */
-export function parseTresenFile(data: unknown): ParseResult<{
-  baseHeightCm?: number;
-  spindelHeightCm?: number;
-  basePieces: Piece2D[];
-  topPieces: Piece2D[];
-}> {
+export function parseTresenFile(data: unknown): ParseResult<TresenSavedState> {
   // Nicht-Objekt ablehnen
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return {
@@ -202,7 +260,22 @@ export function parseTresenFile(data: unknown): ParseResult<{
     };
   }
 
-  const obj = data as Record<string, unknown>;
+  const raw = data as Record<string, unknown>;
+
+  // Ältere Versionen auf die aktuelle Version heben (Kopie, Original bleibt unverändert)
+  const migrated = migratePlan(raw);
+  if (!migrated.ok) {
+    return { ok: false, error: migrated.error };
+  }
+  const obj = migrated.data;
+
+  // Explizit gesetzter kind passt nicht zum Tresen → klare Meldung
+  if (raw.kind === 'kastenbuehne') {
+    return {
+      ok: false,
+      error: 'Das ist ein Bühnen-Plan — bitte im Tab „Bühne“ öffnen.',
+    };
+  }
 
   // Muss mindestens eines der Ebenen-Arrays haben
   const hasBasePieces = Array.isArray(obj.basePieces);
@@ -223,9 +296,21 @@ export function parseTresenFile(data: unknown): ParseResult<{
     };
   }
 
-  // Beide Arrays bereinigen (fehlende werden zu [])
-  const basePieces = hasBasePieces ? sanitizePieces(obj.basePieces) : [];
-  const topPieces = hasTopPieces ? sanitizePieces(obj.topPieces) : [];
+  // Beide Ebenen bereinigen (fehlende werden zu [])
+  const baseReport = hasBasePieces ? sanitizePiecesWithReport(obj.basePieces) : null;
+  const topReport = hasTopPieces ? sanitizePiecesWithReport(obj.topPieces) : null;
+  const basePieces = baseReport?.pieces ?? [];
+  const topPieces = topReport?.pieces ?? [];
+
+  const dropped = (baseReport?.dropped ?? 0) + (topReport?.dropped ?? 0);
+  const reassignedIds = (baseReport?.reassignedIds ?? 0) + (topReport?.reassignedIds ?? 0);
+  const warnings: string[] = [];
+  if (dropped > 0) {
+    warnings.push(`${dropped} ungültige Stücke verworfen.`);
+  }
+  if (reassignedIds > 0) {
+    warnings.push(`${reassignedIds} doppelte oder fehlende Stück-IDs neu vergeben.`);
+  }
 
   // Höhen validieren, falls vorhanden
   let baseHeightCm: number | undefined = undefined;
@@ -242,5 +327,5 @@ export function parseTresenFile(data: unknown): ParseResult<{
     }
   }
 
-  return { ok: true, value: { baseHeightCm, spindelHeightCm, basePieces, topPieces } };
+  return { ok: true, value: { baseHeightCm, spindelHeightCm, basePieces, topPieces }, warnings };
 }
