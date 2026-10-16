@@ -112,9 +112,16 @@ function AnnotationShape({
   const ny = raw > 0 ? dx / raw : 0;
   const mx = (a.x1 + a.x2) / 2;
   const my = (a.y1 + a.y2) / 2;
+  const labelText = `${formatMeters(len)} m`;
+  // Trefferflächen: die 2-px-Linie allein ist (vor allem mit dem Finger) kaum zu treffen, und die
+  // Beschriftung war gar nicht anklickbar. Unsichtbare breite Linie + Rechteck hinter dem Text.
+  const labelW = (labelText.length * 8 + 12) * px;
+  const labelH = 22 * px;
   return (
     <g {...pointer}>
-      <line x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2} stroke={ink} strokeWidth={2 * px} />
+      <line x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2} stroke="transparent" strokeWidth={24 * px} strokeLinecap="round" />
+      <rect x={mx - labelW / 2} y={my - 0.12 - labelH * 0.75} width={labelW} height={labelH} fill="transparent" />
+      <line x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2} stroke={ink} strokeWidth={2 * px} pointerEvents="none" />
       <line
         x1={a.x1 + nx * TICK_HALF_M}
         y1={a.y1 + ny * TICK_HALF_M}
@@ -145,7 +152,7 @@ function AnnotationShape({
         fontFamily="var(--font-mono)"
         pointerEvents="none"
       >
-        {`${formatMeters(len)} m`}
+        {labelText}
       </text>
     </g>
   );
