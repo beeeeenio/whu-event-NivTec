@@ -20,6 +20,7 @@ export function PieceShape({
   fillOpacity,
   stroke,
   strokeWidth,
+  strokeOpacity,
   strokeDasharray,
   pointerEvents,
   style,
@@ -28,6 +29,8 @@ export function PieceShape({
   onPointerUp,
   onPointerCancel,
   onLostPointerCapture,
+  onPointerEnter,
+  onPointerLeave,
   dataPiece,
   children,
 }: {
@@ -36,6 +39,7 @@ export function PieceShape({
   fillOpacity?: number;
   stroke: string;
   strokeWidth: number;
+  strokeOpacity?: number;
   strokeDasharray?: string;
   pointerEvents?: 'all' | 'none';
   style?: React.CSSProperties;
@@ -44,6 +48,9 @@ export function PieceShape({
   onPointerUp?: (e: React.PointerEvent<SVGElement>) => void;
   onPointerCancel?: (e: React.PointerEvent<SVGElement>) => void;
   onLostPointerCapture?: (e: React.PointerEvent<SVGElement>) => void;
+  /** Hover durchreichen (Hervorheben unter der Maus im Editor). */
+  onPointerEnter?: (e: React.PointerEvent<SVGElement>) => void;
+  onPointerLeave?: (e: React.PointerEvent<SVGElement>) => void;
   /** Markiert ein platziertes Stück im DOM (data-pce-piece), damit Touch-Gesten am Plan es erkennen. */
   dataPiece?: boolean;
   children?: React.ReactNode;
@@ -54,6 +61,7 @@ export function PieceShape({
     fillOpacity,
     stroke,
     strokeWidth,
+    strokeOpacity,
     strokeDasharray,
     pointerEvents,
     style,
@@ -62,6 +70,8 @@ export function PieceShape({
     onPointerUp,
     onPointerCancel,
     onLostPointerCapture,
+    onPointerEnter,
+    onPointerLeave,
   };
   if (piece.corner === undefined) {
     return (

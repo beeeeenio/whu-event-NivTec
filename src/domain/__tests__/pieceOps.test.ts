@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { addFilledPieces, checkGroupMove, duplicateWithOffset, movePieceTo, movePiecesBy, removePieceById, removePiecesByIds, rotateGroupAroundCenter, rotatePieceAroundCenter, rotatePieceById, snapGroupDelta } from '../pieceOps';
+import { addFilledPieces, checkGroupMove, duplicateWithOffset, movePieceTo, movePiecesBy, piecesInRect, removePieceById, removePiecesByIds, rotateGroupAroundCenter, rotatePieceAroundCenter, rotatePieceById, snapGroupDelta } from '../pieceOps';
 import { fitsAt, type Piece2D } from '../customShape';
 
 describe('pieceOps', () => {
@@ -391,6 +391,56 @@ describe('Kanten-Snapping und Drehen um den Mittelpunkt', () => {
         { id: 'c', x: 1, y: 2.5, w: 1, d: 1 },
       ];
       expect(rotateGroupAroundCenter(pieces, ['a', 'b'])).toBeNull();
+    });
+  });
+
+  describe('piecesInRect', () => {
+    const grid: Piece2D[] = [
+      { id: 'a', x: 0, y: 0, w: 2, d: 1 },
+      { id: 'b', x: 2, y: 0, w: 2, d: 1 },
+      { id: 'c', x: 0, y: 1, w: 1, d: 1 },
+    ];
+
+    it('intersect wählt auch teilweise überlappte Stücke, contain nur vollständig enthaltene', () => {
+      const rect = { x: 1, y: 0, w: 1.5, d: 1.5 };
+      expect(piecesInRect(grid, rect, 'intersect')).toEqual(['a', 'b']);
+      expect(piecesInRect(grid, rect, 'contain')).toEqual([]);
+    });
+
+    it('contain wählt vollständig enthaltene Stücke aus', () => {
+      // x -0.5..3.5, y -0.5..2.5: a und c liegen ganz drin, b ragt rechts heraus.
+      const rect = { x: -0.5, y: -0.5, w: 4, d: 3 };
+      expect(piecesInRect(grid, rect, 'contain')).toEqual(['a', 'c']);
+      expect(piecesInRect(grid, { x: -0.5, y: -0.5, w: 5, d: 3 }, 'contain')).toEqual(['a', 'b', 'c']);
+    });
+
+    it('intersect ist der Standardmodus', () => {
+      const rect = { x: 0.5, y: 0.5, w: 0.2, d: 0.2 };
+      expect(piecesInRect(grid, rect)).toEqual(['a']);
+    });
+
+    it('normalisiert einen negativen Rahmen (von rechts unten aufgezogen)', () => {
+      const forward = { x: 0.5, y: 0.2, w: 2, d: 1.5 };
+      const backward = { x: 2.5, y: 1.7, w: -2, d: -1.5 };
+      expect(piecesInRect(grid, backward)).toEqual(piecesInRect(grid, forward));
+      expect(piecesInRect(grid, backward)).toEqual(['a', 'b', 'c']);
+      // von (4.5, 1.5) nach links oben aufgezogen: x 1.5..4.5, y -0.5..1.5 -> nur b liegt ganz drin
+      expect(piecesInRect(grid, { x: 4.5, y: 1.5, w: -3, d: -2 }, 'contain')).toEqual(['b']);
+    });
+
+    it('zählt bloßes Kantenberühren bei intersect nicht', () => {
+      // x 1..2: a wird überlappt, b berührt nur die Kante x=2, c berührt nur die Kante x=1.
+      expect(piecesInRect(grid, { x: 1, y: 0, w: 1, d: 1 }, 'intersect')).toEqual(['a']);
+      // Rahmen direkt unter c (y 2..3) berührt nur dessen untere Kante.
+      expect(piecesInRect(grid, { x: 0, y: 2, w: 2, d: 1 }, 'intersect')).toEqual([]);
+      // Rahmen rechts neben allen Stücken (x 4..5) berührt nur die rechte Kante von b.
+      expect(piecesInRect(grid, { x: 4, y: 0, w: 1, d: 1 }, 'intersect')).toEqual([]);
+    });
+
+    it('liefert bei einem leeren Rahmen []', () => {
+      expect(piecesInRect(grid, { x: 0.5, y: 0.5, w: 0, d: 0.5 })).toEqual([]);
+      expect(piecesInRect(grid, { x: 0.5, y: 0.5, w: 1, d: 0 }, 'contain')).toEqual([]);
+      expect(piecesInRect([], { x: 0, y: 0, w: 5, d: 5 })).toEqual([]);
     });
   });
 });

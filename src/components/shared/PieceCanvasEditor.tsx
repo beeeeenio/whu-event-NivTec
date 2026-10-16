@@ -9,7 +9,7 @@ import {
   type PlacementOptions,
   type Piece2D,
 } from '../../domain/customShape';
-import { checkGroupMove, duplicateWithOffset, rotateGroupAroundCenter, rotatePieceAroundCenter, snapGroupDelta } from '../../domain/pieceOps';
+import { checkGroupMove, duplicateWithOffset, piecesInRect, rotateGroupAroundCenter, rotatePieceAroundCenter, snapGroupDelta } from '../../domain/pieceOps';
 import {
   getMemoryClipboard,
   makeClipboardPayload,
@@ -38,6 +38,18 @@ import { ZoomControls } from './editor/ZoomControls';
 import type { DragState, PaletteDragState } from './editor/types';
 import { usePointerDrag } from '../../hooks/usePointerDrag';
 import { pruneSelection } from '../../lib/pieceLayerProps';
+
+/** Rahmenauswahl in Metern (Start- und aktueller Punkt); additive = Umschalt beim Start, erweitert die Auswahl. */
+interface MarqueeState {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  additive: boolean;
+}
+
+/** Abstand des Auswahlrahmens um die Gruppe (Meter). */
+const SELECTION_FRAME_GAP_M = 0.06;
 
 interface Props {
   pieces: Piece2D[];
@@ -179,6 +191,8 @@ export function PieceCanvasEditor({
     setSelectedIds(value === null ? [] : [value]);
   }
   const [drag, setDrag] = useState<DragState | null>(null);
+  // Stück unter der Maus (nur Maus/Stift): wird leicht hervorgehoben.
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [paletteDrag, setPaletteDrag] = useState<PaletteDragState | null>(null);
   // Zoom/Ausschnitt des Plans in Metern; null = automatisch eingepasst (wie bisher).
   const [view, setView] = useState<ViewBox | null>(null);
@@ -697,6 +711,42 @@ export function PieceCanvasEditor({
   );
   const panHandlers = panDrag.bind(null);
 
+  // Rahmenauswahl mit Maus oder Stift (Touch scrollt die Seite, siehe handleTouchDown). Start und Ende im Ref,
+  // der State dient nur dem Render des Rahmens.
+  const [marquee, setMarqueeState] = useState<MarqueeState | null>(null);
+  const marqueeRef = useRef<MarqueeState | null>(null);
+  function setMarquee(next: MarqueeState | null) {
+    marqueeRef.current = next;
+    setMarqueeState(next);
+  }
+  const marqueeDrag = usePointerDrag<null>({
+    onStart: (e) => {
+      if (e.pointerType === 'touch') return false;
+      const start = svgPointFromClient(e.clientX, e.clientY);
+      setMarquee({ x0: start.x, y0: start.y, x1: start.x, y1: start.y, additive: e.shiftKey });
+    },
+    onMove: (e) => {
+      const cur = marqueeRef.current;
+      if (!cur) return;
+      const p = svgPointFromClient(e.clientX, e.clientY);
+      setMarquee({ ...cur, x1: p.x, y1: p.y });
+    },
+    onEnd: (e, s) => {
+      const cur = marqueeRef.current;
+      setMarquee(null);
+      if (!cur) return;
+      // Klick ohne Bewegung auf leerer Fläche: Auswahl aufheben (mit Umschalt bleibt sie).
+      if (!s.moved) {
+        if (!cur.additive) setSelectedIds([]);
+        return;
+      }
+      const p = svgPointFromClient(e.clientX, e.clientY);
+      const ids = piecesInRect(pieces, { x: cur.x0, y: cur.y0, w: p.x - cur.x0, d: p.y - cur.y0 }, 'intersect');
+      setSelectedIds(cur.additive ? [...selectedIds, ...ids.filter((id) => !selectedIds.includes(id))] : ids);
+    },
+    onCancel: () => setMarquee(null),
+  });
+
   // Touch-Gesten am Plan (Entscheidung je Berührung in touchGestureIntent): aktive Berührungspunkte
   // (pointerId → Position in client-px), laufende Zwei-Finger-Geste und Wischen auf leerer Fläche.
   // touch-action bleibt am svg auf none, daher scrollt die Seite hier selbst über window.
@@ -1111,6 +1161,20 @@ export function PieceCanvasEditor({
           : 'Stück anklicken (Umschalt+Klick für mehrere) oder unten eins wählen.';
   }
 
+  // Rahmen der Aufziehen-Geste, normalisiert (oben links); erst ab einer echten Bewegung sichtbar.
+  const marqueeBox =
+    marquee && (marquee.x1 !== marquee.x0 || marquee.y1 !== marquee.y0)
+      ? {
+          x: Math.min(marquee.x0, marquee.x1),
+          y: Math.min(marquee.y0, marquee.y1),
+          w: Math.abs(marquee.x1 - marquee.x0),
+          d: Math.abs(marquee.y1 - marquee.y0),
+        }
+      : null;
+  // Gesamtmaß der Mehrfachauswahl (Rahmen mit Maßangabe).
+  const selectedRects = selectedIds.length > 1 ? pieces.filter((p) => selectedIds.includes(p.id)) : [];
+  const selectionBounds = selectedRects.length > 1 ? unionBounds(selectedRects) : null;
+
   // Nach jedem Commit die aktuellen Handler für die Palette aktualisieren (siehe paletteCallbacks);
   // vor jedem Ereignis ist der Ref damit aktuell, ohne während des Renders auf den Ref zuzugreifen.
   useLayoutEffect(() => {
@@ -1182,7 +1246,7 @@ export function PieceCanvasEditor({
         ref={svgRef}
         viewBox={viewBox}
         className="block w-full h-auto max-h-[420px] rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] select-none"
-        style={{ touchAction: 'none', cursor: panDrag.active ? 'grabbing' : spaceHeld ? 'grab' : undefined }}
+        style={{ touchAction: 'none', cursor: panDrag.active || drag?.moved ? 'grabbing' : spaceHeld ? 'grab' : undefined }}
         role="img"
         aria-label="Bau-Editor — klicken und dann Tastatur nutzen (Pfeiltasten, Enter, R, Entf, Esc, 1–4, T; Kurzbefehle siehe unten)"
         tabIndex={0}
@@ -1249,14 +1313,29 @@ export function PieceCanvasEditor({
           }}
           style={{ cursor: armed ? 'copy' : 'default' }}
         />
-        {!armed && selectedIds.length > 0 && (
+        {/* Leere Fläche: Rahmen aufziehen (Maus/Stift) bzw. Klick hebt die Auswahl auf. Liegt unter den Stücken. */}
+        {!armed && !paletteDrag && !spaceHeld && (
           <rect
             x={0}
             y={0}
             width={canvasWidthM}
             height={canvasDepthM}
             fill="transparent"
-            onClick={() => setSelectedIds([])}
+            {...marqueeDrag.bind(null)}
+          />
+        )}
+        {marqueeBox && (
+          <rect
+            x={marqueeBox.x}
+            y={marqueeBox.y}
+            width={marqueeBox.w}
+            height={marqueeBox.d}
+            fill="var(--color-accent)"
+            fillOpacity={0.08}
+            stroke="var(--color-accent)"
+            strokeWidth={metersPerPx}
+            strokeDasharray={`${4 * metersPerPx} ${3 * metersPerPx}`}
+            pointerEvents="none"
           />
         )}
 
@@ -1299,16 +1378,25 @@ export function PieceCanvasEditor({
           // ist auch die Bounding-Box des echten 1×1-Rechtecks, das würde fälschlich matchen.
           const sondermass = p.corner === undefined && isSondermassPiece(p.w, p.d);
           const interactive = !armed && !paletteDrag && !spaceHeld;
+          // Hervorheben nur für nicht ausgewählte Stücke unter der Maus (Touch hat keinen Hover).
+          const hovered = interactive && hoveredId === p.id && !selectedIds.includes(p.id);
           return (
             <PieceShape
               key={p.id}
               piece={{ ...p, shape: p.shape }}
               fill={sondermass ? `url(#pce-hatch-warning-${uid})` : `url(#pce-hatch-${uid})`}
               fillOpacity={isDragTarget ? 0.25 : 1}
-              stroke={selectedIds.includes(p.id) ? 'var(--color-accent)' : 'var(--color-panel-stroke)'}
-              strokeWidth={selectedIds.includes(p.id) ? 0.035 : 0.02}
+              stroke={selectedIds.includes(p.id) || hovered ? 'var(--color-accent)' : 'var(--color-panel-stroke)'}
+              strokeWidth={selectedIds.includes(p.id) ? 0.035 : hovered ? 0.025 : 0.02}
+              strokeOpacity={hovered ? 0.6 : undefined}
               pointerEvents={interactive ? 'all' : 'none'}
-              style={{ cursor: interactive ? 'grab' : 'default' }}
+              style={{ cursor: !interactive ? 'default' : drag?.moved ? 'inherit' : 'grab' }}
+              onPointerEnter={(e) => {
+                if (e.pointerType !== 'touch') setHoveredId(p.id);
+              }}
+              onPointerLeave={(e) => {
+                if (e.pointerType !== 'touch') setHoveredId((cur) => (cur === p.id ? null : cur));
+              }}
               dataPiece
               {...pieceDrag.bind(p)}
             >
@@ -1318,6 +1406,34 @@ export function PieceCanvasEditor({
             </PieceShape>
           );
         })}
+
+        {selectionBounds && selectedRects.length > 1 && !drag?.moved && (
+          <g pointerEvents="none">
+            <rect
+              x={selectionBounds.x - SELECTION_FRAME_GAP_M}
+              y={selectionBounds.y - SELECTION_FRAME_GAP_M}
+              width={selectionBounds.w + 2 * SELECTION_FRAME_GAP_M}
+              height={selectionBounds.d + 2 * SELECTION_FRAME_GAP_M}
+              fill="none"
+              stroke="var(--color-accent)"
+              strokeWidth={metersPerPx}
+              strokeDasharray={`${4 * metersPerPx} ${3 * metersPerPx}`}
+              opacity={0.7}
+              pointerEvents="none"
+            />
+            <text
+              x={selectionBounds.x + selectionBounds.w / 2}
+              y={selectionBounds.y + selectionBounds.d + SELECTION_FRAME_GAP_M + 11 * metersPerPx}
+              fontSize={11 * metersPerPx}
+              textAnchor="middle"
+              fill="var(--color-accent)"
+              fontFamily="var(--font-mono)"
+              style={{ pointerEvents: 'none' }}
+            >
+              {selectedRects.length} Stücke · {formatMeters(selectionBounds.w)} × {formatMeters(selectionBounds.d)} m
+            </text>
+          </g>
+        )}
 
         <DragOverlay
           pieces={pieces}

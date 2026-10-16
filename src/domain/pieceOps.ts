@@ -205,3 +205,26 @@ export function rotateGroupAroundCenter(pieces: Piece2D[], ids: readonly string[
   }
   return pieces.map((p) => placed.get(p.id) ?? p);
 }
+
+/** Toleranz für Kantenberührung und leere Rahmen (Meter). */
+const RECT_EPS = 1e-6;
+
+/** IDs der Stücke im Rahmen (Meter; w/d dürfen negativ sein = von rechts unten aufgezogen). 'intersect' = überlappt den Rahmen echt, 'contain' = vollständig darin. */
+export function piecesInRect(pieces: readonly Piece2D[], rect: { x: number; y: number; w: number; d: number }, mode: 'intersect' | 'contain' = 'intersect'): string[] {
+  // Rahmen normalisieren: negative Maße heißen "von rechts unten aufgezogen".
+  const x0 = Math.min(rect.x, rect.x + rect.w);
+  const x1 = Math.max(rect.x, rect.x + rect.w);
+  const y0 = Math.min(rect.y, rect.y + rect.d);
+  const y1 = Math.max(rect.y, rect.y + rect.d);
+  // Ein leerer Rahmen (ohne Fläche) wählt nichts aus.
+  if (x1 - x0 <= RECT_EPS || y1 - y0 <= RECT_EPS) return [];
+  return pieces
+    .filter((p) => {
+      if (mode === 'contain') {
+        return p.x >= x0 - RECT_EPS && p.x + p.w <= x1 + RECT_EPS && p.y >= y0 - RECT_EPS && p.y + p.d <= y1 + RECT_EPS;
+      }
+      // Nur echte Überlappung: bloßes Berühren der Kanten zählt nicht.
+      return p.x < x1 - RECT_EPS && p.x + p.w > x0 + RECT_EPS && p.y < y1 - RECT_EPS && p.y + p.d > y0 + RECT_EPS;
+    })
+    .map((p) => p.id);
+}
