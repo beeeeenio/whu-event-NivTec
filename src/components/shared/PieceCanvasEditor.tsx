@@ -1145,6 +1145,11 @@ export function PieceCanvasEditor({
       showBlockedMessage('Weiter nach links geht nicht — die Fläche liegt schon am linken Rand.');
       return;
     }
+    // Mit Raum: alle Stücke gemeinsam gegen Hindernisse und Außenbereich prüfen.
+    if (room && checkGroupMove(pieces, pieces.map((p) => p.id), dx, 0, blockers) !== 'ok') {
+      showBlockedMessage('Dort ist kein Platz – ein Hindernis oder die Raumgrenze liegt im Weg. Nichts verschoben.');
+      return;
+    }
     onShiftAll(dx);
   }
 
