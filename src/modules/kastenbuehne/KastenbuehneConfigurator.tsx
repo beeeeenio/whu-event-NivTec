@@ -31,29 +31,52 @@ import { formatMeters } from '../../lib/format';
 import { useDraftAutosave } from '../../hooks/useDraftAutosave';
 import { useExportCanvas } from '../../hooks/useExportCanvas';
 import { NO_RAILING_SIDES, useDerivedGeometry } from '../../hooks/useDerivedGeometry';
-import { usePieceLayer } from '../../hooks/usePieceLayer';
+import { useUndoableState } from '../../hooks/useUndoableState';
+import { createPieceLayerProps } from '../../lib/pieceLayerProps';
 import type { CiId } from '../../lib/ci';
+import { setDocField, type KastenbuehneDoc } from '../../domain/planDocument';
 import type { ForexPanel, ForexSide } from '../../domain/types';
 import { ForexEdgeEditor } from './ForexEdgeEditor';
 
 type ResultTab = 'kennzahlen' | 'grundriss' | '3d' | 'material';
 
 export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
-  const [heightCm, setHeightCm] = useState(STRUCTURE_RULES.buehne.heightOptionsCm[0]);
   const [resultTab, setResultTab] = useState<ResultTab>('kennzahlen');
   const { onCanvasReady, getCanvas } = useExportCanvas(() => setResultTab('3d'));
 
-  const layer = usePieceLayer();
+  // Ein Dokument, eine Undo-Historie: Höhe, Stücke und Forex-Blenden. Import und "Verwerfen" sind
+  // jeweils ein einziger Schritt, Höhe/Stück/Blende ändern sich je Schritt einzeln.
+  const doc = useUndoableState<KastenbuehneDoc>({
+    heightCm: STRUCTURE_RULES.buehne.heightOptionsCm[0],
+    pieces: [],
+    forexPanels: [],
+  });
+  const { set: setDoc, undo, redo, canUndo, canRedo, transact } = doc;
+  const { heightCm, pieces, forexPanels } = doc.value;
+  const setHeightCm = (v: number) => doc.set((d) => setDocField(d, 'heightCm', v));
+  const setForexPanels = (u: ForexPanel[] | ((p: ForexPanel[]) => ForexPanel[])) =>
+    doc.set((d) => setDocField(d, 'forexPanels', u));
+
+  const editorProps = useMemo(
+    () =>
+      createPieceLayerProps(pieces, (u) => setDoc((d) => setDocField(d, 'pieces', u)), {
+        undo,
+        redo,
+        canUndo,
+        canRedo,
+        transact,
+      }),
+    [pieces, setDoc, undo, redo, canUndo, canRedo, transact],
+  );
 
   // Alles Abgeleitete (Kennzahlen, Grundriss, 3D, PPTX, Materialliste) sieht die Bühne an (0,0) —
   // wo sie auf der Zeichenfläche liegt ("Alles verschieben"), soll dort nichts verändern. Der
   // Editor selbst bekommt weiter die echten Positionen.
-  const normalizedPieces = useMemo(() => normalizeToOrigin(layer.pieces), [layer.pieces]);
+  const normalizedPieces = useMemo(() => normalizeToOrigin(pieces), [pieces]);
   const layout = useMemo(() => buildLayoutFromPieces(normalizedPieces), [normalizedPieces]);
 
   // Forex-Blenden hängen per pieceId an einer Kante. Liegt dort (nach Verschieben/Löschen) kein
   // freies Podest mehr, fallen sie aus 3D, Materialliste und Export heraus.
-  const [forexPanels, setForexPanels] = useState<ForexPanel[]>([]);
   const placedForex = useMemo(() => placeForexPanels(normalizedPieces, forexPanels), [normalizedPieces, forexPanels]);
   const activeForexPanels = useMemo(() => placedForex.map((f) => f.panel), [placedForex]);
 
@@ -116,24 +139,24 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
     [podestMaterialList, normalizedPieces, forexPanels, heightCm],
   );
 
-  const hasContent = layer.pieces.length > 0;
+  const hasContent = pieces.length > 0;
 
   function applySavedState(data: unknown): string | null {
     const result = parseKastenbuehneFile(data);
     if (!result.ok) {
       return result.error;
     }
-    if (result.value.heightCm !== undefined) setHeightCm(result.value.heightCm);
-    layer.replace(result.value.pieces);
-    setForexPanels(result.value.forexPanels ?? []);
+    const v = result.value;
+    // Import ist ein einziger Undo-Schritt: Höhe, Stücke und Blenden zusammen.
+    doc.set((d) => ({ heightCm: v.heightCm ?? d.heightCm, pieces: v.pieces, forexPanels: v.forexPanels ?? [] }));
     return null;
   }
 
   // forexPanels nur mitschreiben, wenn es welche gibt — Dateien ohne Blenden bleiben wie bisher.
   const currentSavedState: KastenbuehneSavedState =
     activeForexPanels.length > 0
-      ? { heightCm, pieces: layer.pieces, forexPanels: activeForexPanels }
-      : { heightCm, pieces: layer.pieces };
+      ? { heightCm, pieces, forexPanels: activeForexPanels }
+      : { heightCm, pieces };
 
   function handleToggleForex(pieceId: string, side: ForexSide) {
     setForexPanels((prev) => toggleForexPanel(prev, pieceId, side));
@@ -154,10 +177,8 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
               type="button"
               onClick={() => {
                 discard();
-                layer.replace([]);
-                setForexPanels([]);
+                doc.set({ heightCm: STRUCTURE_RULES.buehne.heightOptionsCm[0], pieces: [], forexPanels: [] });
                 setForexPrints({});
-                setHeightCm(STRUCTURE_RULES.buehne.heightOptionsCm[0]);
               }}
               className="shrink-0 text-xs underline"
             >
@@ -181,10 +202,10 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
           </span>
         </div>
         <PieceCanvasEditor
-          {...layer.editorProps}
+          {...editorProps}
           frontEdgeLabel="Vorderkante"
         />
-        <PlacedPiecesChips pieces={layer.pieces} onRemovePiece={layer.editorProps.onRemovePiece} />
+        <PlacedPiecesChips pieces={pieces} onRemovePiece={editorProps.onRemovePiece} />
       </section>
 
       {hasContent && (

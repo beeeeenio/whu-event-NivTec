@@ -21,8 +21,10 @@ import { formatMeters } from '../../lib/format';
 import { useDraftAutosave } from '../../hooks/useDraftAutosave';
 import { useExportCanvas } from '../../hooks/useExportCanvas';
 import { NO_RAILING_SIDES, useDerivedGeometry } from '../../hooks/useDerivedGeometry';
-import { usePieceLayer } from '../../hooks/usePieceLayer';
+import { useUndoableState } from '../../hooks/useUndoableState';
+import { createPieceLayerProps } from '../../lib/pieceLayerProps';
 import type { CiId } from '../../lib/ci';
+import { setDocField, type TresenDoc } from '../../domain/planDocument';
 
 // Kein Schnellstart-Regler: jede Ebene wächst ausschließlich mit dem, was tatsächlich
 // gebaut wurde — Mindestbreite, damit ein leerer Plan nicht winzig wirkt, plus Puffer. Beide
@@ -35,16 +37,48 @@ const CANVAS_BUFFER_M = 2;
 type ResultTab = 'kennzahlen' | 'grundriss' | '3d' | 'material';
 
 export function TresenConfigurator({ ci }: { ci: CiId }) {
-  const [baseHeightCm, setBaseHeightCm] = useState(STRUCTURE_RULES.tresen.heightOptionsCm[0]);
-  const [spindelHeightCm, setSpindelHeightCm] = useState(SPINDEL_HEIGHT_OPTIONS_CM[1]);
   const [resultTab, setResultTab] = useState<ResultTab>('kennzahlen');
   const { onCanvasReady, getCanvas } = useExportCanvas(() => setResultTab('3d'));
 
-  const base = usePieceLayer();
-  const top = usePieceLayer();
+  // Ein Dokument, eine Undo-Historie für beide Ebenen und beide Höhen: Undo macht den letzten
+  // Schritt des Dokuments rückgängig, egal in welcher Ebene er passiert ist. Import und
+  // "Verwerfen" sind jeweils ein einziger Schritt.
+  const doc = useUndoableState<TresenDoc>({
+    baseHeightCm: STRUCTURE_RULES.tresen.heightOptionsCm[0],
+    spindelHeightCm: SPINDEL_HEIGHT_OPTIONS_CM[1],
+    basePieces: [],
+    topPieces: [],
+  });
+  const { set: setDoc, undo, redo, canUndo, canRedo, transact } = doc;
+  const { baseHeightCm, spindelHeightCm, basePieces, topPieces } = doc.value;
+  const setBaseHeightCm = (v: number) => doc.set((d) => setDocField(d, 'baseHeightCm', v));
+  const setSpindelHeightCm = (v: number) => doc.set((d) => setDocField(d, 'spindelHeightCm', v));
 
-  const baseLayout = useMemo(() => buildLayoutFromPieces(base.pieces), [base.pieces]);
-  const topLayout = useMemo(() => buildLayoutFromPieces(top.pieces), [top.pieces]);
+  const baseEditorProps = useMemo(
+    () =>
+      createPieceLayerProps(basePieces, (u) => setDoc((d) => setDocField(d, 'basePieces', u)), {
+        undo,
+        redo,
+        canUndo,
+        canRedo,
+        transact,
+      }),
+    [basePieces, setDoc, undo, redo, canUndo, canRedo, transact],
+  );
+  const topEditorProps = useMemo(
+    () =>
+      createPieceLayerProps(topPieces, (u) => setDoc((d) => setDocField(d, 'topPieces', u)), {
+        undo,
+        redo,
+        canUndo,
+        canRedo,
+        transact,
+      }),
+    [topPieces, setDoc, undo, redo, canUndo, canRedo, transact],
+  );
+
+  const baseLayout = useMemo(() => buildLayoutFromPieces(basePieces), [basePieces]);
+  const topLayout = useMemo(() => buildLayoutFromPieces(topPieces), [topPieces]);
 
   // Enges Begrenzungsrechteck statt layout.widthM/depthM (die immer vom Ursprung aus messen) —
   // sonst zeigt der Referenz-Umriss der jeweils anderen Ebene eine Fläche, in der die echten
@@ -94,7 +128,7 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
     [baseMaterialList, topMaterialList],
   );
 
-  const hasContent = base.pieces.length > 0 || top.pieces.length > 0;
+  const hasContent = basePieces.length > 0 || topPieces.length > 0;
 
   // Setzt die Thekenplatte auf dieselbe Breite wie der aktuelle Unterbau, bei halber Tiefe —
   // ersetzt den bisherigen Inhalt der Ebene komplett (kein Zusammenführen), da das eine bewusste
@@ -115,7 +149,8 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
     const sortedDepths = [...CATALOG_DEPTHS_M].sort((a, b) => b - a);
     const targetDepthM = sortedDepths.find((d) => d <= targetHalfDepth + EPS) ?? 0.39;
     const filled = fillHorizontalSpan(baseBoundingBox.widthM, targetDepthM, baseBoundingBox.x, baseBoundingBox.y);
-    top.replace(filled.map((p) => ({ ...p, id: makePieceId() })));
+    const newTop = filled.map((p) => ({ ...p, id: makePieceId() }));
+    doc.set((d) => setDocField(d, 'topPieces', newTop));
   }
 
   function applySavedState(data: unknown): string | null {
@@ -123,14 +158,18 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
     if (!result.ok) {
       return result.error;
     }
-    if (result.value.baseHeightCm !== undefined) setBaseHeightCm(result.value.baseHeightCm);
-    if (result.value.spindelHeightCm !== undefined) setSpindelHeightCm(result.value.spindelHeightCm);
-    base.replace(result.value.basePieces);
-    top.replace(result.value.topPieces);
+    const v = result.value;
+    // Import ist ein einziger Undo-Schritt: beide Höhen und beide Ebenen zusammen.
+    doc.set((d) => ({
+      baseHeightCm: v.baseHeightCm ?? d.baseHeightCm,
+      spindelHeightCm: v.spindelHeightCm ?? d.spindelHeightCm,
+      basePieces: v.basePieces,
+      topPieces: v.topPieces,
+    }));
     return null;
   }
 
-  const currentSavedState = { baseHeightCm, spindelHeightCm, basePieces: base.pieces, topPieces: top.pieces };
+  const currentSavedState = { baseHeightCm, spindelHeightCm, basePieces, topPieces };
   const { restored, discard } = useDraftAutosave('tresen', currentSavedState, applySavedState);
 
   // Beide Ebenen bilden vorne (y=0, siehe Vorderkanten-Beschriftung in PieceCanvasEditor) eine
@@ -152,10 +191,12 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
               type="button"
               onClick={() => {
                 discard();
-                base.replace([]);
-                top.replace([]);
-                setBaseHeightCm(STRUCTURE_RULES.tresen.heightOptionsCm[0]);
-                setSpindelHeightCm(SPINDEL_HEIGHT_OPTIONS_CM[1]);
+                doc.set({
+                  baseHeightCm: STRUCTURE_RULES.tresen.heightOptionsCm[0],
+                  spindelHeightCm: SPINDEL_HEIGHT_OPTIONS_CM[1],
+                  basePieces: [],
+                  topPieces: [],
+                });
               }}
               className="shrink-0 text-xs underline"
             >
@@ -178,12 +219,12 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
         </div>
         {bracingRequired && <WarningBanner>Ab 80 cm Unterbauhöhe ist eine Diagonalverstrebung erforderlich.</WarningBanner>}
         <PieceCanvasEditor
-          {...base.editorProps}
+          {...baseEditorProps}
           frontEdgeLabel="Unterbau-Vorderkante"
           minCanvasWidthM={sharedCanvasWidthM}
           referenceFootprint={topBoundingBox ? { ...topBoundingBox, label: 'Thekenplatte' } : undefined}
         />
-        <PlacedPiecesChips pieces={base.pieces} onRemovePiece={base.editorProps.onRemovePiece} />
+        <PlacedPiecesChips pieces={basePieces} onRemovePiece={baseEditorProps.onRemovePiece} />
       </section>
 
       <section className="space-y-3">
@@ -226,12 +267,12 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
           </p>
         </div>
         <PieceCanvasEditor
-          {...top.editorProps}
+          {...topEditorProps}
           frontEdgeLabel="Thekenplatten-Vorderkante"
           minCanvasWidthM={sharedCanvasWidthM}
           referenceFootprint={baseBoundingBox ? { ...baseBoundingBox, label: 'Unterbau' } : undefined}
         />
-        <PlacedPiecesChips pieces={top.pieces} onRemovePiece={top.editorProps.onRemovePiece} />
+        <PlacedPiecesChips pieces={topPieces} onRemovePiece={topEditorProps.onRemovePiece} />
       </section>
 
       {hasContent && (
