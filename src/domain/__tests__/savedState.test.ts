@@ -237,6 +237,82 @@ describe('savedState', () => {
     });
   });
 
+  describe('Raumkontur (room)', () => {
+    const room = {
+      widthM: 10,
+      depthM: 8,
+      obstacles: [{ id: 'ob-1', kind: 'saeule', x: 2, y: 2, w: 0.5, d: 0.5, label: 'Mitte' }],
+    };
+
+    it('Bühne: Datei mit room lädt im Roundtrip', () => {
+      const result = parseKastenbuehneFile({
+        heightCm: 60,
+        pieces: [{ id: 'piece-1', x: 0, y: 0, w: 2, d: 1 }],
+        room,
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.room).toEqual(room);
+        expect(result.warnings).toEqual([]);
+      }
+    });
+
+    it('Tresen: Datei mit room lädt im Roundtrip', () => {
+      const data = {
+        baseHeightCm: 60,
+        basePieces: [{ id: 'piece-1', x: 0, y: 0, w: 2, d: 1 }],
+        topPieces: [],
+        room,
+      };
+      const result = parseTresenFile(data);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toEqual(data);
+      }
+    });
+
+    it('ohne room ist das Feld nicht im value', () => {
+      const bühne = parseKastenbuehneFile({ heightCm: 60, pieces: [] });
+      const tresen = parseTresenFile({ basePieces: [], topPieces: [] });
+      expect(bühne.ok && 'room' in bühne.value).toBe(false);
+      expect(tresen.ok && 'room' in tresen.value).toBe(false);
+    });
+
+    it('ungültiger room ergibt eine Warnung und wird ignoriert', () => {
+      const result = parseKastenbuehneFile({
+        heightCm: 60,
+        pieces: [],
+        room: { widthM: -1, depthM: 8, obstacles: [] },
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.room).toBeUndefined();
+        expect('room' in result.value).toBe(false);
+        expect(result.warnings).toEqual(['Raumkontur ungültig – ignoriert.']);
+      }
+    });
+
+    it('verworfene Hindernisse werden im Bericht genannt', () => {
+      const result = parseTresenFile({
+        basePieces: [],
+        topPieces: [],
+        room: {
+          widthM: 10,
+          depthM: 8,
+          obstacles: [
+            { id: 'ob-1', kind: 'tuer', x: 0, y: 0, w: 1, d: 1 },
+            { id: 'ob-2', kind: 'tuer', x: 0, y: 0, w: 0, d: 1 },
+          ],
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.room?.obstacles).toHaveLength(1);
+        expect(result.warnings).toEqual(['1 ungültige Hindernisse verworfen.']);
+      }
+    });
+  });
+
   describe('sanitizePieces', () => {
     it('replaces duplicate id with a unique one', () => {
       const pieces = [

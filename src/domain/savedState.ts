@@ -3,6 +3,7 @@ import { STRUCTURE_RULES } from './rules';
 import { isCatalogTriangleBox } from './panels';
 import { SPINDEL_HEIGHT_OPTIONS_CM } from './tresen';
 import { FOREX_SIDES, isTrianglePiece, pieceHasSide } from './forex';
+import { sanitizeRoom, type RoomPlan } from './room';
 import { migratePlan, type PlanKind } from './migrations';
 import type { ForexPanel, ForexSide, PieceShape, TriangleCorner } from './types';
 
@@ -17,6 +18,8 @@ export interface KastenbuehneSavedState {
   pieces: Piece2D[];
   /** Optional — ältere Dateien ohne Forex-Blenden laden weiter. */
   forexPanels?: ForexPanel[];
+  /** Optional — Raumkontur mit Hindernissen; ältere Dateien ohne Raum laden weiter. */
+  room?: RoomPlan;
 }
 
 /**
@@ -30,6 +33,8 @@ export interface TresenSavedState {
   spindelHeightCm?: number;
   basePieces: Piece2D[];
   topPieces: Piece2D[];
+  /** Optional — Raumkontur mit Hindernissen; ältere Dateien ohne Raum laden weiter. */
+  room?: RoomPlan;
 }
 
 const VALID_CORNERS: readonly TriangleCorner[] = ['tl', 'tr', 'bl', 'br'];
@@ -170,6 +175,23 @@ export type ParseResult<T> =
   | { ok: false; error: string };
 
 /**
+ * Liest die optionale Raumkontur einer Datei. Fehlt das Feld, passiert nichts. Ist der Raum
+ * ungültig, kommt eine Warnung; verworfene Hindernisse werden einzeln gemeldet.
+ */
+function readRoom(obj: Record<string, unknown>, warnings: string[]): RoomPlan | undefined {
+  if (!('room' in obj)) return undefined;
+  const roomReport = sanitizeRoom(obj.room);
+  if (!roomReport.room) {
+    warnings.push('Raumkontur ungültig – ignoriert.');
+    return undefined;
+  }
+  if (roomReport.dropped > 0) {
+    warnings.push(`${roomReport.dropped} ungültige Hindernisse verworfen.`);
+  }
+  return roomReport.room;
+}
+
+/**
  * Validiert und parsed eine Kastenbühne-Datei — prüft ob sie wirklich eine Bühne ist
  * (nicht versehentlich ein Tresen), und ob sie die notwendigen Felder hat.
  */
@@ -244,7 +266,13 @@ export function parseKastenbuehneFile(data: unknown): ParseResult<KastenbuehneSa
     }
   }
 
-  return { ok: true, value: { heightCm, pieces, forexPanels }, warnings };
+  const room = readRoom(obj, warnings);
+
+  return {
+    ok: true,
+    value: { heightCm, pieces, forexPanels, ...(room ? { room } : {}) },
+    warnings,
+  };
 }
 
 /**
@@ -327,5 +355,11 @@ export function parseTresenFile(data: unknown): ParseResult<TresenSavedState> {
     }
   }
 
-  return { ok: true, value: { baseHeightCm, spindelHeightCm, basePieces, topPieces }, warnings };
+  const room = readRoom(obj, warnings);
+
+  return {
+    ok: true,
+    value: { baseHeightCm, spindelHeightCm, basePieces, topPieces, ...(room ? { room } : {}) },
+    warnings,
+  };
 }
