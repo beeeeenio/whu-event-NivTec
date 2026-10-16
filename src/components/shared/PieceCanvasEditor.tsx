@@ -111,6 +111,8 @@ interface Props {
   onAnnotationsChange?: (next: PlanAnnotation[]) => void;
   /** Ganze Ebene gesperrt: nur Ansicht (Zoom, Maße), keine Bearbeitung. Nur Ansichtszustand, nicht in der Plan-Datei. */
   locked?: boolean;
+  /** Nur-Lesen-Ansicht (geteilter Plan): zeigt den Plan, Zoom/Pan und Maße, aber keine Bearbeitung. */
+  readOnly?: boolean;
 }
 
 /** Aktives Beschriften-Werkzeug: Messlinie, Textnotiz oder ein Symbol. null = keins. */
@@ -232,9 +234,10 @@ export function PieceCanvasEditor({
   annotations,
   onAnnotationsChange,
   locked = false,
+  readOnly = false,
 }: Props) {
-  // Gesperrte Ebene: Palette, Beschriften, Bausteine, Inspector und Ändern-Schalter entfallen; Zoom und Maße bleiben.
-  const editable = !locked;
+  // Gesperrte Ebene oder Nur-Lesen-Ansicht: Palette, Beschriften, Bausteine, Inspector und Ändern-Schalter entfallen; Zoom und Maße bleiben.
+  const editable = !readOnly && !locked;
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const svgRef = useRef<SVGSVGElement>(null);
   // Äußerer Container: Fokusprüfung für die Leertaste (Verschieben), siehe unten.
@@ -1443,7 +1446,7 @@ export function PieceCanvasEditor({
     const piece = pieces.find((q) => q.id === id);
     if (!piece) return;
     const locked = lockedIds.has(id);
-    if (!locked) setSelectedIds([id]);
+    if (!locked && editable) setSelectedIds([id]);
     pieceElsRef.current.get(id)?.focus();
     announce(pieceAriaLabel(piece, !locked, locked));
   }
@@ -1479,7 +1482,7 @@ export function PieceCanvasEditor({
       return;
     }
     // Strg+Pfeil (ohne Umschalt): zum nächsten Stück in dieser Richtung springen.
-    if (editable && focusId && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+    if (focusId && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
       const unit = ARROW_DELTA[e.key];
       if (unit) {
         e.preventDefault();
@@ -1496,8 +1499,6 @@ export function PieceCanvasEditor({
       if (frozenBaseRef.current === null) setView(null);
       return;
     }
-    // Gesperrte Ebene: alle ändernden Tasten ignorieren (Zoom, 0, Esc bleiben oben).
-    if (!editable) return;
     // N / Umschalt+N: nächstes bzw. vorheriges Stück in Lesereihenfolge (erst y, dann x). Auf dem Mac ist Strg+Pfeil ein Systemkürzel.
     if (e.key.toLowerCase() === 'n' && !e.ctrlKey && !e.metaKey && !e.altKey && pieces.length > 0) {
       e.preventDefault();
@@ -1508,6 +1509,8 @@ export function PieceCanvasEditor({
       jumpToPiece(target.id);
       return;
     }
+    // Gesperrte Ebene oder Nur-Lesen: alle ändernden Tasten ignorieren (Zoom, 0, Esc, Fokus-Sprünge bleiben oben).
+    if (!editable) return;
     // Entf/Rücktaste: zuerst eine gewählte Notiz, sonst die gewählten Stücke.
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAnno && onAnnotationsChange) {
       e.preventDefault();
@@ -1658,6 +1661,7 @@ export function PieceCanvasEditor({
 
   // Statuszeile der Toolbar: sagt, was gerade passiert bzw. was als Nächstes zu tun ist.
   function statusText(): string {
+    if (readOnly) return 'Nur-Lesen-Ansicht';
     if (!editable) return 'Ebene gesperrt – zum Bearbeiten entsperren.';
     if (annoTool) {
       if (annoTool === 'measure') return measureStart ? 'Zweiten Messpunkt antippen. Esc bricht ab.' : 'Ersten Messpunkt antippen. Esc bricht ab.';
@@ -1742,11 +1746,11 @@ export function PieceCanvasEditor({
   });
   return (
     <div ref={containerRef} className="space-y-3" onKeyDown={handleEditorKeyDown} onPaste={handleEditorPaste}>
-      {/* Gesperrt: "Alles verschieben" und "Plan leeren" entfallen (piecesCount 0 blendet sie aus). */}
+      {/* Gesperrt oder Nur-Lesen: "Alles verschieben" und "Plan leeren" entfallen (piecesCount 0 blendet sie aus). */}
       <EditorToolbar
         statusText={statusText()}
-        onUndo={onUndo}
-        onRedo={onRedo}
+        onUndo={readOnly ? undefined : onUndo}
+        onRedo={readOnly ? undefined : onRedo}
         canUndo={editable && canUndo}
         canRedo={editable && canRedo}
         canRotate={editable && (!!armed || !!selectedPiece || (selectedIds.length > 1 && !!onReplaceAll))}
@@ -1843,7 +1847,7 @@ export function PieceCanvasEditor({
           </div>
         )}
       </div>
-      {clearedSnack && pieces.length === 0 && (
+      {clearedSnack && pieces.length === 0 && !readOnly && (
         <div role="status" className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm">
           Plan geleert
           {onUndo && (
