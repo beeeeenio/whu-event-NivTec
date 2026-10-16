@@ -272,7 +272,7 @@ export function PieceCanvasEditor({
   // Render-Verzögerung im direkt danach feuernden `onClick` verfügbar ist.
   const suppressNextClickRef = useRef(false);
   // Stabile Callbacks für die memo-Palette: der Ref zeigt bei jedem Render auf die aktuellen Handler
-  // (Zuweisung unten vor dem return), die Callbacks selbst bleiben über alle Renders gleich.
+  // (Zuweisung im useLayoutEffect vor dem return), die Callbacks selbst bleiben über alle Renders gleich.
   const paletteHandlersRef = useRef({
     down: handlePaletteButtonPointerDown,
     move: handlePaletteButtonPointerMove,
