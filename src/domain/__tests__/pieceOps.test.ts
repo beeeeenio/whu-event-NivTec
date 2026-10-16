@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { addFilledPieces, checkGroupMove, duplicateWithOffset, moveGroupTo, movePieceTo, movePiecesBy, piecesInRect, removePieceById, removePiecesByIds, rotateGroupAroundCenter, rotatePieceAroundCenter, rotatePieceById, snapGroupDelta, validatePieceEdit, withoutLocked } from '../pieceOps';
+import { addFilledPieces, checkGroupMove, duplicateWithOffset, moveGroupTo, movePieceTo, movePiecesBy, nearestPieceInDirection, piecesInRect, removePieceById, removePiecesByIds, rotateGroupAroundCenter, rotatePieceAroundCenter, rotatePieceById, snapGroupDelta, validatePieceEdit, withoutLocked } from '../pieceOps';
 import { fitsAt, type Piece2D } from '../customShape';
 import { ROOM_BLOCKER_PREFIX, roomBlockers, type RoomPlan } from '../room';
 
@@ -649,5 +649,55 @@ describe('validatePieceEdit', () => {
     it('liefert eine leere Liste, wenn alle gesperrt sind', () => {
       expect(withoutLocked(['p1'], new Set(['p1']))).toEqual([]);
     });
+  });
+});
+
+describe('nearestPieceInDirection', () => {
+  it('springt rechts zum direkten Nachbarn, nicht zum entfernteren Stück in derselben Reihe', () => {
+    const row: Piece2D[] = [
+      { id: 'a', x: 0, y: 0, w: 1, d: 1 },
+      { id: 'b', x: 2, y: 0, w: 1, d: 1 },
+      { id: 'c', x: 4, y: 0, w: 1, d: 1 },
+    ];
+    expect(nearestPieceInDirection(row, 'a', 'right')).toBe('b');
+    expect(nearestPieceInDirection(row, 'b', 'right')).toBe('c');
+    expect(nearestPieceInDirection(row, 'c', 'left')).toBe('b');
+    expect(nearestPieceInDirection(row, 'a', 'left')).toBeNull();
+  });
+
+  it('liefert null, wenn in der Richtung kein Stück liegt', () => {
+    const pieces: Piece2D[] = [
+      { id: 'a', x: 0, y: 0, w: 1, d: 1 },
+      { id: 'b', x: 2, y: 0, w: 1, d: 1 },
+    ];
+    expect(nearestPieceInDirection(pieces, 'a', 'up')).toBeNull();
+    expect(nearestPieceInDirection(pieces, 'b', 'down')).toBeNull();
+    expect(nearestPieceInDirection(pieces, 'a', 'left')).toBeNull();
+  });
+
+  it('liefert null bei unbekannter Start-ID oder ohne Stücke', () => {
+    expect(nearestPieceInDirection([], 'a', 'right')).toBeNull();
+    const pieces: Piece2D[] = [{ id: 'a', x: 0, y: 0, w: 1, d: 1 }];
+    expect(nearestPieceInDirection(pieces, 'nope', 'right')).toBeNull();
+  });
+
+  it('bestraft Querversatz: ein Stück mit kürzerem Abstand, aber seitlich versetzt, verliert', () => {
+    // Mittelpunkte: a (0,5 / 0,5); b rechts auf gleicher Höhe (Abstand 2, quer 0); c näher (Abstand 1), aber 2 m quer.
+    const pieces: Piece2D[] = [
+      { id: 'a', x: 0, y: 0, w: 1, d: 1 },
+      { id: 'b', x: 2, y: 0, w: 1, d: 1 },
+      { id: 'c', x: 1, y: 2, w: 1, d: 1 },
+    ];
+    expect(nearestPieceInDirection(pieces, 'a', 'right')).toBe('b');
+  });
+
+  it('wählt in senkrechter Richtung das Stück darunter bzw. darüber', () => {
+    const column: Piece2D[] = [
+      { id: 'a', x: 0, y: 0, w: 1, d: 1 },
+      { id: 'b', x: 0, y: 1.5, w: 1, d: 1 },
+      { id: 'c', x: 0, y: 3, w: 1, d: 1 },
+    ];
+    expect(nearestPieceInDirection(column, 'a', 'down')).toBe('b');
+    expect(nearestPieceInDirection(column, 'c', 'up')).toBe('b');
   });
 });

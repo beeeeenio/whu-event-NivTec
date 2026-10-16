@@ -93,6 +93,52 @@ export function withoutLocked(ids: string[], locked: ReadonlySet<string>): strin
   return ids.filter((id) => !locked.has(id));
 }
 
+/** Richtung für die Tastatur-Navigation zwischen Stücken (Strg+Pfeil). */
+export type PieceDirection = 'left' | 'right' | 'up' | 'down';
+
+/**
+ * Nächstes Stück in einer Richtung, ausgehend von `fromId` (Mittelpunkte). Nur Stücke, deren Mittelpunkt
+ * in dieser Richtung liegt, kommen in Frage. Kosten = Abstand entlang der Achse + 2 × Querabstand,
+ * so gewinnt ein direkter Nachbar gegenüber einem schräg versetzten. Gleichstand: das zuerst genannte Stück.
+ * null, wenn `fromId` unbekannt ist oder in der Richtung kein Stück liegt.
+ */
+export function nearestPieceInDirection(pieces: readonly Piece2D[], fromId: string, dir: PieceDirection): string | null {
+  const from = pieces.find((p) => p.id === fromId);
+  if (!from) return null;
+  const fx = from.x + from.w / 2;
+  const fy = from.y + from.d / 2;
+  let best: string | null = null;
+  let bestCost = Infinity;
+  for (const p of pieces) {
+    if (p.id === fromId) continue;
+    const dx = p.x + p.w / 2 - fx;
+    const dy = p.y + p.d / 2 - fy;
+    // Achse entlang der Richtung (along) und quer dazu (across).
+    let along: number;
+    let across: number;
+    if (dir === 'right') {
+      along = dx;
+      across = dy;
+    } else if (dir === 'left') {
+      along = -dx;
+      across = dy;
+    } else if (dir === 'down') {
+      along = dy;
+      across = dx;
+    } else {
+      along = -dy;
+      across = dx;
+    }
+    if (along <= RECT_EPS) continue;
+    const cost = along + 2 * Math.abs(across);
+    if (cost < bestCost) {
+      bestCost = cost;
+      best = p.id;
+    }
+  }
+  return best;
+}
+
 /**
  * Removes all pieces whose IDs are in `ids` in one step.
  * Returns a new array. Returns the SAME array reference if none of the IDs was found.

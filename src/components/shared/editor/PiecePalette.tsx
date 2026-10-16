@@ -94,7 +94,7 @@ function PaletteTile({ view, armed, handlers }: { view: TileView; armed: ToolPay
       aria-pressed={isArmed}
       aria-label={`${view.name} ${isArmed ? 'ausgewählt' : 'auswählen'}, oder direkt auf den Plan ziehen`}
       title={view.title}
-      className={`flex min-w-[3.25rem] cursor-pointer select-none touch-none flex-col items-center gap-1 rounded-md border px-2 py-1.5 ${
+      className={`pce-target flex min-w-[3.25rem] cursor-pointer select-none touch-none flex-col items-center gap-1 rounded-md border px-2 py-1.5 ${
         isArmed
           ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-contrast)]'
           : 'border-[var(--color-panel-stroke)] bg-[var(--color-surface)] text-[var(--color-text)] hover:border-[var(--color-accent)]'
@@ -198,7 +198,7 @@ export const PiecePalette = memo(function PiecePalette({
                   onClick={b.onDelete}
                   aria-label={`Baustein ${b.label} löschen`}
                   title="Baustein löschen"
-                  className="cursor-pointer rounded px-1 text-sm leading-none text-[var(--color-text-muted)] hover:text-[var(--color-danger)]"
+                  className="pce-target cursor-pointer rounded px-1 text-sm leading-none text-[var(--color-text-muted)] hover:text-[var(--color-danger)]"
                 >
                   ×
                 </button>

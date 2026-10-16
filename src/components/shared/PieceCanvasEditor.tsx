@@ -11,7 +11,7 @@ import {
   type PlacementOptions,
   type Piece2D,
 } from '../../domain/customShape';
-import { checkGroupMove, duplicateWithOffset, moveGroupTo, piecesInRect, rotateGroupAroundCenter, rotatePieceAroundCenter, snapGroupDelta, validatePieceEdit, withoutLocked, type GroupMoveCheck } from '../../domain/pieceOps';
+import { checkGroupMove, duplicateWithOffset, moveGroupTo, nearestPieceInDirection, piecesInRect, rotateGroupAroundCenter, rotatePieceAroundCenter, snapGroupDelta, validatePieceEdit, withoutLocked, type GroupMoveCheck } from '../../domain/pieceOps';
 import {
   getMemoryClipboard,
   makeClipboardPayload,
@@ -188,6 +188,24 @@ function rotatedBy(piece: Piece2D, turns: number): Piece2D {
 }
 
 
+/** Anzahl mit Wort: "1 Stück", sonst "n Stücke". */
+function stueckeText(n: number): string {
+  return n === 1 ? '1 Stück' : `${n} Stücke`;
+}
+
+/** Name eines Stücks für Screenreader (Roving-Focus und Tastatur-Sprung). */
+function pieceAriaLabel(p: Piece2D, selected: boolean, locked: boolean): string {
+  return `Podest ${formatMeters(p.w, 2)}×${formatMeters(p.d, 2)} m bei x=${formatMeters(p.x, 2)}, y=${formatMeters(p.y, 2)} m${selected ? ', ausgewählt' : ''}${locked ? ', gesperrt' : ''}`;
+}
+
+/** Kurzname eines aufgenommenen Werkzeugs für Ansagen. */
+function payloadLabel(p: ToolPayload): string {
+  if (p.kind === 'block') return `Baustein ${p.label}`;
+  if (p.kind === 'viertelkreis') return 'Viertelkreis 1 m';
+  const { w, d } = payloadSize(p);
+  return `${p.kind === 'triangle' ? 'Dreieckpodest' : 'Stück'} ${formatMeters(w, 2)}×${formatMeters(d, 2)} m`;
+}
+
 export function PieceCanvasEditor({
   pieces,
   onAddPieces,
@@ -325,6 +343,10 @@ export function PieceCanvasEditor({
     setFrozenBaseState(v);
   }
   const [blockedMessage, setBlockedMessage] = useState<string | null>(null);
+  // Barrierefreiheit: Ansage für Screenreader (aria-live), Stück mit Tastaturfokus (Fokusring) und DOM-Elemente der Stücke für den Fokus.
+  const [announcement, setAnnouncement] = useState('');
+  const [focusedPieceId, setFocusedPieceId] = useState<string | null>(null);
+  const pieceElsRef = useRef(new Map<string, SVGElement>());
   // Position der Aktionsleiste über der Auswahl (Pixel relativ zum Wrapper), im Layout-Effect nachgeführt.
   const [barPos, setBarPos] = useState<{ left: number; top: number } | null>(null);
   // Rechtsklick öffnet die Leiste am Cursor; gilt nur, solange die Auswahl dieselbe Liste ist (Referenzgleichheit).
@@ -366,6 +388,7 @@ export function PieceCanvasEditor({
 
   function arm(payload: ToolPayload | null) {
     setArmedState(payload);
+    if (payload) announce(`${payloadLabel(payload)} aufgenommen – auf den Plan tippen oder Enter.`);
     setSelectedId(null);
     setPointerPos(null);
     setMoveMode(false);
@@ -470,6 +493,12 @@ export function PieceCanvasEditor({
   useEffect(() => () => {
     if (blockedTimerRef.current) clearTimeout(blockedTimerRef.current);
   }, []);
+
+  // Ansage für Screenreader: erst leeren, dann im nächsten Frame setzen, damit ein gleicher Text erneut angekündigt wird.
+  function announce(text: string) {
+    setAnnouncement('');
+    requestAnimationFrame(() => setAnnouncement(text));
+  }
 
   // "Plan geleert"-Snackbar mit Rückgängig: verschwindet nach 6 s, nach Rückgängig und sobald wieder
   // Stücke auf dem Plan liegen. Der Timer läuft wie blockedTimerRef über ein Ref und wird beim Unmount aufgeräumt.
@@ -632,6 +661,7 @@ export function PieceCanvasEditor({
       }
       // Ein Baustein ist ein einziger Schritt für Rückgängig, egal wie viele Stücke er hat.
       onAddPieces(filled);
+      announce(`${payloadLabel(payload)} platziert bei x=${formatMeters(anchor.x, 2)}, y=${formatMeters(anchor.y, 2)} m.`);
       return;
     }
     const { w, d } = payloadSize(payload);
@@ -642,6 +672,7 @@ export function PieceCanvasEditor({
         return;
       }
       onAddPieces([payloadToFilled(payload, exact.x, exact.y)]);
+      announce(`${payloadLabel(payload)} platziert bei x=${formatMeters(exact.x, 2)}, y=${formatMeters(exact.y, 2)} m.`);
       return;
     }
     const target = snappedPlacement(w, d, pos.x - w / 2, pos.y - d / 2, undefined, placementOptions());
@@ -650,6 +681,7 @@ export function PieceCanvasEditor({
       return;
     }
     onAddPieces([payloadToFilled(payload, target.x, target.y)]);
+    announce(`${payloadLabel(payload)} platziert bei x=${formatMeters(target.x, 2)}, y=${formatMeters(target.y, 2)} m.`);
   }
 
   function commitPayloadAt(payload: ToolPayload, clientX: number, clientY: number, free = false) {
@@ -856,10 +888,12 @@ export function PieceCanvasEditor({
   // nichts committen, daher kein Undo-Schritt. lostpointercapture feuert erst nach pointerup, das
   // bereits committet hat — dort ist das Aufräumen nur noch harmlos.
   function cancelPieceDrag() {
+    const wasMoving = dragRef.current?.moved === true;
     dragThrottle.cancel();
     dragRef.current = null;
     setDrag(null);
     setFrozenBase(null);
+    if (wasMoving) announce('Ziehen abgebrochen.');
   }
 
   // Mehrere Callback-Aufrufe als ein Undo-Schritt (fällt ohne onTransact auf direkten Aufruf zurück).
@@ -941,6 +975,7 @@ export function PieceCanvasEditor({
         }
         const valid = checkGroupMove(pieces, selectedIds, dx, dy, blockers) === 'ok';
         if (cur.moved && cur.group.dx === dx && cur.group.dy === dy && cur.group.valid === valid) return;
+        if (!cur.moved) announce(`${selectedIds.length} Stücke aufgenommen. Loslassen legt ab, Esc bricht ab.`);
         next = { ...cur, moved: true, group: { ...cur.group, dx, dy, valid } };
       } else {
         // Mit gedrehten Maßen rechnen (Drehen während des Ziehens, siehe rotateDraggedPiece).
@@ -949,6 +984,10 @@ export function PieceCanvasEditor({
           ? placeUnsnapped(occupied, shape.w, shape.d, x - cur.grabOffset.x, y - cur.grabOffset.y, piece.id)
           : snappedPlacement(shape.w, shape.d, x - cur.grabOffset.x, y - cur.grabOffset.y, piece.id, placementOptions());
         if (cur.moved && cur.target && cur.target.x === target.x && cur.target.y === target.y && cur.target.valid === target.valid) return;
+        if (!cur.moved) {
+          const sz = rotatedBy(piece, cur.rotations ?? 0);
+          announce(`Stück ${formatMeters(sz.w, 2)}×${formatMeters(sz.d, 2)} m aufgenommen. Loslassen legt ab, Esc bricht ab.`);
+        }
         next = { ...cur, moved: true, target };
       }
       dragRef.current = next;
@@ -974,6 +1013,12 @@ export function PieceCanvasEditor({
         } else if (cur.moved && !valid) {
           showBlockedMessage('Dort ist kein Platz – die Auswahl würde andere Stücke überlappen. Nichts verschoben.');
         }
+        if (cur.moved && valid) {
+          const moving = pieces.filter((p) => selectedIds.includes(p.id));
+          const gx = Math.min(...moving.map((p) => p.x)) + dx;
+          const gy = Math.min(...moving.map((p) => p.y)) + dy;
+          announce(`Abgelegt bei x=${formatMeters(gx, 2)}, y=${formatMeters(gy, 2)} m.`);
+        }
       } else if (cur.moved && cur.target?.valid === false) {
         // Außerhalb des Raums (voller Raum): eigene Meldung, sonst das Überlappen mit einem anderen Stück.
         const sz = rotatedBy(piece, cur.rotations ?? 0);
@@ -993,6 +1038,7 @@ export function PieceCanvasEditor({
         } else {
           onMovePiece(piece.id, tx, ty);
         }
+        announce(`Abgelegt bei x=${formatMeters(tx, 2)}, y=${formatMeters(ty, 2)} m.`);
         setSelectedId(piece.id);
       } else if (!session.moved) {
         setSelectedId((c) => (c === piece.id ? null : piece.id));
@@ -1208,6 +1254,9 @@ export function PieceCanvasEditor({
   }
 
   const selectedPiece = selectedId ? pieces.find((p) => p.id === selectedId) ?? null : null;
+  // Roving-Focus: nur das Stück mit tabIndex 0 ist per Tab erreichbar (erste Auswahl, sonst das erste Stück).
+  const focusId = selectedIds[0] ?? pieces[0]?.id;
+  const focusRingPiece = focusedPieceId ? pieces.find((q) => q.id === focusedPieceId) ?? null : null;
 
   function rotateSelected() {
     // Mehrfachauswahl: als Block um die Mitte drehen (nur mit onReplaceAll).
@@ -1278,6 +1327,7 @@ export function PieceCanvasEditor({
 
   function removeSelected() {
     if (selectedIds.length === 0) return;
+    announce(`${stueckeText(selectedIds.length)} entfernt.`);
     if (onRemovePieces) onRemovePieces(selectedIds);
     else batch(() => selectedIds.forEach((id) => onRemovePiece(id)));
     setSelectedIds([]);
@@ -1303,6 +1353,7 @@ export function PieceCanvasEditor({
       showBlockedMessage('Kein freier Platz zum Duplizieren gefunden.');
       return;
     }
+    announce(`${stueckeText(copy.length)} dupliziert.`);
     if (onInsertPieces) {
       const withIds = copy.map((p) => ({ ...p, id: makePieceId() }));
       onInsertPieces(withIds);
@@ -1387,6 +1438,24 @@ export function PieceCanvasEditor({
     if (dx !== 0 || dy !== 0) moveSelectionBy(dx, dy);
   }
 
+  // Tastatur-Sprung zu einem Stück: Fokus setzen, auswählen (gesperrte bleiben unausgewählt) und den Namen ansagen.
+  function jumpToPiece(id: string) {
+    const piece = pieces.find((q) => q.id === id);
+    if (!piece) return;
+    const locked = lockedIds.has(id);
+    if (!locked) setSelectedIds([id]);
+    pieceElsRef.current.get(id)?.focus();
+    announce(pieceAriaLabel(piece, !locked, locked));
+  }
+
+  // Tastaturfokus auf einem Stück: Fokusring zeigen und das Stück allein auswählen. Nur bei sichtbarem Fokus,
+  // sonst würde der Fokus nach dem Mausklick Umschalt-Mehrfachauswahl und Gruppenziehen zerstören.
+  function handlePieceFocus(e: React.FocusEvent<SVGElement>, p: Piece2D) {
+    if (!(e.currentTarget as Element).matches(':focus-visible')) return;
+    setFocusedPieceId(p.id);
+    if (editable && !lockedIds.has(p.id) && !selectedIds.includes(p.id)) setSelectedIds([p.id]);
+  }
+
   // Tastatur-Bedienung des Plans, nur aktiv wenn das SVG fokussiert ist (Klick oder Tab hinein) —
   // dadurch keine Kollision mit Eingabefeldern anderswo auf der Seite (z.B. Konfigurationsname).
   // Pfeiltasten bewegen die Auswahl (Umschalt = 1 m, blockiert mit Meldung) oder — bei bewaffnetem
@@ -1408,6 +1477,17 @@ export function PieceCanvasEditor({
       arm(null);
       return;
     }
+    // Strg+Pfeil (ohne Umschalt): zum nächsten Stück in dieser Richtung springen.
+    if (editable && focusId && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      const unit = ARROW_DELTA[e.key];
+      if (unit) {
+        e.preventDefault();
+        const dir = unit[0] < 0 ? 'left' : unit[0] > 0 ? 'right' : unit[1] < 0 ? 'up' : 'down';
+        const next = nearestPieceInDirection(pieces, focusId, dir);
+        if (next) jumpToPiece(next);
+        return;
+      }
+    }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     // 0 passt den Plan wieder ins Bild – nicht während eines Ziehens, dort bleibt die Ansicht stehen.
     if (e.key === '0') {
@@ -1417,6 +1497,16 @@ export function PieceCanvasEditor({
     }
     // Gesperrte Ebene: alle ändernden Tasten ignorieren (Zoom, 0, Esc bleiben oben).
     if (!editable) return;
+    // N / Umschalt+N: nächstes bzw. vorheriges Stück in Lesereihenfolge (erst y, dann x). Auf dem Mac ist Strg+Pfeil ein Systemkürzel.
+    if (e.key.toLowerCase() === 'n' && !e.ctrlKey && !e.metaKey && !e.altKey && pieces.length > 0) {
+      e.preventDefault();
+      const ordered = [...pieces].sort((a, b) => a.y - b.y || a.x - b.x);
+      const idx = ordered.findIndex((q) => q.id === focusId);
+      const step = e.shiftKey ? -1 : 1;
+      const target = idx < 0 ? ordered[step > 0 ? 0 : ordered.length - 1] : ordered[(idx + step + ordered.length) % ordered.length];
+      jumpToPiece(target.id);
+      return;
+    }
     // Entf/Rücktaste: zuerst eine gewählte Notiz, sonst die gewählten Stücke.
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAnno && onAnnotationsChange) {
       e.preventDefault();
@@ -1542,6 +1632,7 @@ export function PieceCanvasEditor({
       showBlockedMessage('Kein freier Platz zum Einfügen gefunden.');
       return;
     }
+    announce(`${stueckeText(placed.length)} eingefügt.`);
     if (onInsertPieces) {
       const withIds = placed.map((p) => ({ ...p, id: makePieceId() }));
       onInsertPieces(withIds);
@@ -1744,7 +1835,7 @@ export function PieceCanvasEditor({
         }
       />
       {blockedMessage && (
-        <div role="status" className="rounded-md border border-[var(--color-danger)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-danger)]">
+        <div role="status" aria-live="assertive" className="rounded-md border border-[var(--color-danger)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-danger)]">
           {blockedMessage}
         </div>
       )}
@@ -1766,14 +1857,16 @@ export function PieceCanvasEditor({
         </div>
       )}
 
+      <div aria-live="polite" className="sr-only">{announcement}</div>
       <div ref={wrapRef} className="relative">
       <svg
         ref={svgRef}
         viewBox={viewBox}
         className="block w-full h-auto max-h-[420px] rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] select-none"
         style={{ touchAction: 'none', cursor: panDrag.active || drag?.moved ? 'grabbing' : spaceHeld ? 'grab' : undefined }}
-        role="img"
-        aria-label="Bau-Editor — klicken und dann Tastatur nutzen (Pfeiltasten, Enter, R, Entf, Esc, 1–4, T; Kurzbefehle siehe unten)"
+        role="application"
+        aria-roledescription="Plan-Editor"
+        aria-label="Bau-Editor — klicken und dann Tastatur nutzen (Pfeiltasten, Enter, R, Entf, Esc, 1–4, T; Strg+Pfeil oder N/Umschalt+N springt zum nächsten Stück; Kurzbefehle siehe unten)"
         tabIndex={0}
         onKeyDown={handleCanvasKeyDown}
         onPointerDownCapture={(e) => {
@@ -1928,6 +2021,15 @@ export function PieceCanvasEditor({
               }}
               onContextMenu={(e) => handlePieceContextMenu(e, p.id)}
               dataPiece
+              tabIndex={p.id === focusId ? 0 : -1}
+              role="button"
+              ariaLabel={pieceAriaLabel(p, selectedIds.includes(p.id), isLocked)}
+              elRef={(el) => {
+                if (el) pieceElsRef.current.set(p.id, el);
+                else pieceElsRef.current.delete(p.id);
+              }}
+              onFocus={(e) => handlePieceFocus(e, p)}
+              onBlur={() => setFocusedPieceId((cur) => (cur === p.id ? null : cur))}
               {...pieceDrag.bind(p)}
             >
               <title>
@@ -1938,6 +2040,10 @@ export function PieceCanvasEditor({
           );
         })}
 
+        {/* Fokusring für das Stück mit Tastaturfokus: SVG zeigt sonst kein outline. */}
+        {focusRingPiece && (
+          <PieceShape piece={focusRingPiece} fill="none" stroke="var(--color-accent)" strokeWidth={0.05} pointerEvents="none" />
+        )}
         {selectionBounds && selectedRects.length > 1 && !drag?.moved && (
           <g pointerEvents="none">
             <rect
@@ -2025,7 +2131,7 @@ export function PieceCanvasEditor({
         <button
           type="button"
           aria-label="Gezogenes Stück drehen"
-          className="absolute right-2 top-2 z-10 flex h-12 w-12 touch-none select-none items-center justify-center rounded-full border border-[var(--color-accent)] bg-[var(--color-surface)] text-xl text-[var(--color-text)] shadow-md"
+          className="pce-target absolute right-2 top-2 z-10 flex h-12 w-12 touch-none select-none items-center justify-center rounded-full border border-[var(--color-accent)] bg-[var(--color-surface)] text-xl text-[var(--color-text)] shadow-md"
           onPointerDown={(e) => {
             // Ein zweiter Finger dreht sofort; der Plan darunter bekommt die Geste nicht.
             e.stopPropagation();

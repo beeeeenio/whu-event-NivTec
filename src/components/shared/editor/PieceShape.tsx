@@ -33,6 +33,12 @@ export function PieceShape({
   onPointerLeave,
   onContextMenu,
   dataPiece,
+  tabIndex,
+  role,
+  ariaLabel,
+  onFocus,
+  onBlur,
+  elRef,
   children,
 }: {
   piece: ShapeGeometry;
@@ -56,10 +62,25 @@ export function PieceShape({
   onContextMenu?: (e: React.MouseEvent<SVGElement>) => void;
   /** Markiert ein platziertes Stück im DOM (data-pce-piece), damit Touch-Gesten am Plan es erkennen. */
   dataPiece?: boolean;
+  /** Tastatur-Fokus (Roving-Focus im Plan): nur das Stück mit tabIndex 0 ist per Tab erreichbar. */
+  tabIndex?: number;
+  role?: string;
+  /** Name für Screenreader (aria-label). */
+  ariaLabel?: string;
+  onFocus?: (e: React.FocusEvent<SVGElement>) => void;
+  onBlur?: (e: React.FocusEvent<SVGElement>) => void;
+  /** Callback-Ref: meldet das DOM-Element, damit der Editor gezielt den Fokus setzen kann. */
+  elRef?: (el: SVGElement | null) => void;
   children?: React.ReactNode;
 }) {
   const shared = {
     'data-pce-piece': dataPiece ? '1' : undefined,
+    tabIndex,
+    role,
+    'aria-label': ariaLabel,
+    onFocus,
+    onBlur,
+    ref: elRef,
     fill,
     fillOpacity,
     stroke,

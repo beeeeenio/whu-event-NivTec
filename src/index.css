@@ -199,3 +199,11 @@ h2,
 h3 {
   font-family: var(--font-display);
 }
+
+/* Touch-Ziele im Editor: auf Geräten ohne Maus (grober Zeiger) mindestens 44 px; am Desktop bleibt das Layout unverändert. */
+@media (pointer: coarse) {
+  .pce-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
