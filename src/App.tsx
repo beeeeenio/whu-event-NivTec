@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { KastenbuehneConfigurator } from './modules/kastenbuehne/KastenbuehneConfigurator';
 import { TresenConfigurator } from './modules/tresen/TresenConfigurator';
 import type { CiId } from './lib/ci';
+import type { PlanKind } from './domain/migrations';
+import { decodePlanToken, readShareToken } from './lib/planShare';
 
 // Tisch/Tribüne (und die alte reglerbasierte Bühne) sind bewusst aus der App entfernt,
 // aber nicht gelöscht — die Dateien liegen weiter unter _archive/modules/{tisch,tribuene,buehne}/
@@ -17,6 +19,15 @@ const TABS: Array<{ id: TabId; label: string }> = [
 // von WHU Event — das Tool wird deshalb von mehreren Initiativen genutzt, mit je eigener CI,
 // während "WHU Event" als das eigentlich verantwortliche Team immer sichtbar bleibt.
 const CI_STORAGE_KEY = 'nivtec-ci';
+
+/** Geteilter Plan aus dem URL-Hash (`#plan=…`): nur zur Ansicht, nie Teil des eigenen Entwurfs. */
+interface SharedPlan {
+  kind: PlanKind;
+  data: unknown;
+}
+
+/** Tab, in dem ein geteilter Plan geöffnet wird. */
+const SHARED_TAB: Record<PlanKind, TabId> = { kastenbuehne: 'buehne', tresen: 'tresen' };
 const CIS: Array<{ id: CiId; label: string }> = [
   { id: 'forumwhu', label: 'forum WHU' },
   { id: 'cff', label: 'Campus for Finance' },
@@ -136,6 +147,46 @@ function App() {
     localStorage.setItem(CI_STORAGE_KEY, ci);
   }, [ci]);
 
+  const [shared, setShared] = useState<SharedPlan | null>(null);
+  const [shareError, setShareError] = useState<string | null>(null);
+  // Zählt die Ladevorgänge: Dekodieren ist async, ein älterer Hash darf einen neueren Stand nicht überschreiben.
+  const shareLoadSeq = useRef(0);
+
+  // Geteilten Plan beim Öffnen und bei jeder Hash-Änderung laden. Ohne Token gibt es keinen geteilten Plan mehr.
+  useEffect(() => {
+    async function loadSharedFromHash() {
+      const seq = ++shareLoadSeq.current;
+      const token = readShareToken(location.hash);
+      if (token === null) {
+        setShared(null);
+        setShareError(null);
+        return;
+      }
+      const decoded = await decodePlanToken(token);
+      if (seq !== shareLoadSeq.current) return;
+      if (decoded === null) {
+        setShared(null);
+        setShareError('Geteilter Link ist ungültig.');
+        return;
+      }
+      setShared({ kind: decoded.kind, data: decoded.data });
+      setShareError(null);
+      setActiveTab(SHARED_TAB[decoded.kind]);
+    }
+    void loadSharedFromHash();
+    window.addEventListener('hashchange', loadSharedFromHash);
+    return () => window.removeEventListener('hashchange', loadSharedFromHash);
+  }, []);
+
+  // Verlassen der Nur-Lesen-Ansicht: Hash weg, eigener Entwurf bleibt wie er war.
+  function leaveShared() {
+    // Ein noch laufendes Dekodieren darf die gerade verlassene Ansicht nicht wieder öffnen.
+    shareLoadSeq.current++;
+    setShared(null);
+    setShareError(null);
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+
   return (
     <div className="min-h-screen bg-[var(--color-bg)]">
       <header className="border-b border-[var(--color-border)] bg-[var(--color-surface)]">
@@ -194,11 +245,30 @@ function App() {
       </nav>
 
       <main className="max-w-4xl mx-auto px-4 py-6">
+        {shareError && (
+          <div
+            role="alert"
+            className="mb-4 flex items-center justify-between gap-2 rounded-md border border-[var(--color-warning)] px-3 py-2 text-sm text-[var(--color-warning)]"
+          >
+            <span>{shareError}</span>
+            <button type="button" onClick={leaveShared} className="shrink-0 text-xs underline">
+              Schließen
+            </button>
+          </div>
+        )}
         <div hidden={activeTab !== 'buehne'}>
-          <KastenbuehneConfigurator ci={ci} />
+          <KastenbuehneConfigurator
+            ci={ci}
+            shared={shared?.kind === 'kastenbuehne' ? shared.data : undefined}
+            onLeaveShared={leaveShared}
+          />
         </div>
         <div hidden={activeTab !== 'tresen'}>
-          <TresenConfigurator ci={ci} />
+          <TresenConfigurator
+            ci={ci}
+            shared={shared?.kind === 'tresen' ? shared.data : undefined}
+            onLeaveShared={leaveShared}
+          />
         </div>
       </main>
 

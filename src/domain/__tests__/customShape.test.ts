@@ -11,6 +11,7 @@ import {
   fitsAt,
   mirrorPieceInPlace,
   normalizeToOrigin,
+  placeUnsnapped,
   rotatePieceInPlace,
   shiftPieces,
   wedgePiecesAt,
@@ -425,5 +426,39 @@ describe('normalizeToOrigin', () => {
     expect(b.widthM).toBe(a.widthM);
     expect(b.depthM).toBe(a.depthM);
     expect(b.panels).toEqual(a.panels);
+  });
+});
+
+describe('findFreePosition snapToleranceM', () => {
+  const existing = [piece('a', 0, 0, 2, 0.75)];
+
+  it('rastet ohne options an die Kante des Nachbarn (Kantenfang 0,2 m)', () => {
+    expect(findFreePosition(existing, 2, 1, 0, 0.85)).toEqual({ x: 0, y: 0.75 });
+  });
+
+  it('rastet mit snapToleranceM 0.05 nicht mehr an die Kante, sondern aufs 0,5-m-Raster', () => {
+    expect(findFreePosition(existing, 2, 1, 0, 0.85, undefined, { snapToleranceM: 0.05 })).toEqual({ x: 0, y: 1 });
+  });
+});
+
+describe('placeUnsnapped', () => {
+  it('rundet auf cm (1.234 wird 1.23)', () => {
+    expect(placeUnsnapped([], 1, 1, 1.234, 0).x).toBe(1.23);
+  });
+
+  it('klemmt negative Werte auf 0', () => {
+    expect(placeUnsnapped([], 1, 1, -0.7, -2)).toEqual({ x: 0, y: 0, valid: true });
+  });
+
+  it('meldet valid=false bei Überlappung und valid=true an freier Stelle', () => {
+    const existing = [piece('a', 0, 0, 2, 1)];
+    expect(placeUnsnapped(existing, 1, 1, 0.5, 0.5).valid).toBe(false);
+    expect(placeUnsnapped(existing, 1, 1, 2, 0).valid).toBe(true);
+  });
+
+  it('ignoriert das eigene Stück über excludeId', () => {
+    const existing = [piece('a', 0, 0, 2, 1)];
+    expect(placeUnsnapped(existing, 2, 1, 0.01, 0.01, 'a').valid).toBe(true);
+    expect(placeUnsnapped(existing, 2, 1, 0.01, 0.01).valid).toBe(false);
   });
 });

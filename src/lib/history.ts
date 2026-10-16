@@ -83,3 +83,26 @@ export function redoHistory<T>(h: History<T>): History<T> {
     txId: undefined,
   };
 }
+
+/** Zähler für Undo-Transaktionen: alle set()-Aufrufe innerhalb von beginTx/endTx teilen eine txId. Verändert das Objekt bewusst — gedacht für useRef. */
+export interface TxCounter { id: number; depth: number }
+
+export function createTxCounter(): TxCounter {
+  return { id: 0, depth: 0 };
+}
+
+/** Liefert die txId für einen set()-Aufruf: innerhalb einer Transaktion die gemeinsame ID, sonst eine neue. */
+export function txIdForSet(c: TxCounter): number {
+  return c.depth > 0 ? c.id : (c.id += 1);
+}
+
+/** Öffnet eine Transaktion; verschachtelte Aufrufe gehören zur äußersten. */
+export function beginTx(c: TxCounter): void {
+  if (c.depth === 0) c.id += 1;
+  c.depth += 1;
+}
+
+/** Schließt eine Transaktion; die Tiefe fällt nie unter 0. */
+export function endTx(c: TxCounter): void {
+  c.depth = Math.max(0, c.depth - 1);
+}

@@ -2,6 +2,7 @@ import { useId } from 'react';
 import { boundingBoxOf } from '../../domain/customShape';
 import type { LabeledFootPosition } from '../../domain/feet';
 import { footColorForHeight } from '../../domain/footColorScale';
+import { DimensionChains } from './DimensionChains';
 import { quarterCirclePath, trianglePoints } from '../../domain/triangle';
 import type { LayoutResult, RailingSide } from '../../domain/types';
 import { formatMeters } from '../../lib/format';
@@ -18,6 +19,8 @@ interface Props {
   /** Erzwingt eine Mindestbreite der viewBox — z.B. damit zwei nebeneinander gezeigte Ebenen
    *  (Tresen: Unterbau + Thekenplatte) dieselbe Skala teilen, statt unabhängig zu skalieren. */
   minWidthM?: number;
+  /** Zeigt Außen- und Segmentmaße (Maßketten) unter bzw. rechts neben dem Grundriss. */
+  showDimensions?: boolean;
 }
 
 const RAILING_EDGES: Record<RailingSide, (w: number, d: number) => [number, number, number, number]> = {
@@ -43,11 +46,13 @@ export function FloorPlanSVG({
   onToggleRailingSide,
   showLabels = true,
   minWidthM,
+  showDimensions = false,
 }: Props) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const { widthM, depthM, panels } = layout;
   const footColor = footColorForHeight(heightCm);
-  const pad = 0.8;
+  // Mit Maßketten braucht der Rand Platz für zwei Maßreihen (je 0,35 m) plus Text.
+  const pad = showDimensions ? 1.2 : 0.8;
   const effectiveWidthM = Math.max(widthM, minWidthM ?? 0);
   const viewBox = `${-pad} ${-pad} ${effectiveWidthM + pad * 2} ${depthM + pad * 2}`;
   // Beschriftung zeigt die tatsächlich belegte Fläche — widthM/depthM zählen ab dem Ursprung
@@ -230,6 +235,7 @@ export function FloorPlanSVG({
             </text>
           );
         })}
+      {showDimensions && <DimensionChains rects={panels} />}
       </svg>
       {showLabels && (
         <p className="text-xs text-[var(--color-text-muted)]">

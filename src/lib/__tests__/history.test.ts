@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyChange, createHistory, redoHistory, undoHistory } from '../history';
+import { applyChange, beginTx, createHistory, createTxCounter, endTx, redoHistory, txIdForSet, undoHistory } from '../history';
 
 describe('history', () => {
   it('creates a new history with initial value', () => {
@@ -95,5 +95,62 @@ describe('history', () => {
     expect(h3.txId).toBeUndefined();
     const h4 = redoHistory(h3);
     expect(h4.txId).toBeUndefined();
+  });
+});
+
+describe('TxCounter', () => {
+  it('liefert außerhalb einer Transaktion für jeden Aufruf eine neue ID', () => {
+    const c = createTxCounter();
+    const a = txIdForSet(c);
+    const b = txIdForSet(c);
+    expect(a).not.toBe(b);
+  });
+
+  it('teilt innerhalb von beginTx/endTx eine ID, verschieden von der davor', () => {
+    const c = createTxCounter();
+    const before = txIdForSet(c);
+    beginTx(c);
+    const a = txIdForSet(c);
+    const b = txIdForSet(c);
+    endTx(c);
+    expect(a).toBe(b);
+    expect(a).not.toBe(before);
+  });
+
+  it('behält bei verschachtelten Transaktionen eine ID', () => {
+    const c = createTxCounter();
+    beginTx(c);
+    beginTx(c);
+    const a = txIdForSet(c);
+    endTx(c);
+    const b = txIdForSet(c);
+    endTx(c);
+    expect(b).toBe(a);
+  });
+
+  it('vergibt nach endTx wieder neue IDs', () => {
+    const c = createTxCounter();
+    beginTx(c);
+    const inTx = txIdForSet(c);
+    endTx(c);
+    const after = txIdForSet(c);
+    expect(after).not.toBe(inTx);
+  });
+
+  it('fällt bei überzähligem endTx nicht unter Tiefe 0', () => {
+    const c = createTxCounter();
+    endTx(c);
+    expect(c.depth).toBe(0);
+  });
+
+  it('ergibt mit applyChange zwei Änderungen in einer Transaktion ein past-Element', () => {
+    const c = createTxCounter();
+    let h = createHistory(1);
+    beginTx(c);
+    h = applyChange(h, 2, txIdForSet(c));
+    h = applyChange(h, 3, txIdForSet(c));
+    endTx(c);
+    expect(h.present).toBe(3);
+    expect(h.past).toEqual([1]);
   });
 });

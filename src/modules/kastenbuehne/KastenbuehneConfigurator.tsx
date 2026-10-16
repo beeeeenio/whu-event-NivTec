@@ -11,7 +11,10 @@ import { PlacedPiecesChips } from '../../components/shared/PlacedPiecesChips';
 import { SavedConfigsPanel } from '../../components/shared/SavedConfigsPanel';
 import { StairsRampCalculator } from '../../components/shared/StairsRampCalculator';
 import { SummaryStats } from '../../components/shared/SummaryStats';
-import { buildLayoutFromPieces, normalizeToOrigin } from '../../domain/customShape';
+import { WarningBanner } from '../../components/shared/WarningBanner';
+import { boundingBoxOf, buildLayoutFromPieces, makePieceId, normalizeToOrigin } from '../../domain/customShape';
+import { shiftAnnotations } from '../../domain/annotations';
+import { obstaclesOverlapping, piecesOutsideRoom } from '../../domain/room';
 import {
   addAllFrontEdges,
   appendMaterialItems,
@@ -27,35 +30,110 @@ import { loadForexPrints, saveForexPrints, type ForexPrints } from '../../lib/fo
 import { slicePrint } from '../../lib/printImage';
 import { STRUCTURE_RULES } from '../../domain/rules';
 import { parseKastenbuehneFile, type KastenbuehneSavedState } from '../../domain/savedState';
+import { PLAN_SCHEMA_VERSION } from '../../domain/migrations';
 import { formatMeters } from '../../lib/format';
 import { useDraftAutosave } from '../../hooks/useDraftAutosave';
 import { useExportCanvas } from '../../hooks/useExportCanvas';
 import { NO_RAILING_SIDES, useDerivedGeometry } from '../../hooks/useDerivedGeometry';
-import { usePieceLayer } from '../../hooks/usePieceLayer';
+import { useUndoableState } from '../../hooks/useUndoableState';
+import { createPieceLayerProps } from '../../lib/pieceLayerProps';
 import type { CiId } from '../../lib/ci';
+import { setDocField, type KastenbuehneDoc } from '../../domain/planDocument';
 import type { ForexPanel, ForexSide } from '../../domain/types';
 import { ForexEdgeEditor } from './ForexEdgeEditor';
+import { STAGE_TEMPLATES } from '../../domain/templates';
+import { ACTION_BTN } from '../../components/shared/editor/styles';
+import { RoomPanel } from '../../components/shared/RoomPanel';
 
 type ResultTab = 'kennzahlen' | 'grundriss' | '3d' | 'material';
 
-export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
-  const [heightCm, setHeightCm] = useState(STRUCTURE_RULES.buehne.heightOptionsCm[0]);
+/**
+ * `shared`: geteilter Plan aus dem URL-Hash (Rohdaten). Solange er offen ist, zeigen alle Anzeigen
+ * ihn nur lesend an; der eigene Entwurf bleibt unverändert. `onLeaveShared` verlässt die Ansicht.
+ */
+export function KastenbuehneConfigurator({
+  ci,
+  shared,
+  onLeaveShared,
+}: {
+  ci: CiId;
+  shared?: unknown;
+  onLeaveShared?: () => void;
+}) {
   const [resultTab, setResultTab] = useState<ResultTab>('kennzahlen');
+  // Maßketten im Grundriss und in der PPTX (Standard: an).
+  const [showPlanDims, setShowPlanDims] = useState(true);
+  // Ansicht: Bühne sperren und Forex-Blenden ausblenden. Nicht in der Plan-Datei; die Materialliste bleibt vollständig, das 3D-Bild im Export zeigt die aktuelle Ansicht.
+  const [stageLocked, setStageLocked] = useState(false);
+  const [forexHidden, setForexHidden] = useState(false);
   const { onCanvasReady, getCanvas } = useExportCanvas(() => setResultTab('3d'));
 
-  const layer = usePieceLayer();
+  // Ein Dokument, eine Undo-Historie: Höhe, Stücke und Forex-Blenden. Import und "Verwerfen" sind
+  // jeweils ein einziger Schritt, Höhe/Stück/Blende ändern sich je Schritt einzeln.
+  const doc = useUndoableState<KastenbuehneDoc>({
+    heightCm: STRUCTURE_RULES.buehne.heightOptionsCm[0],
+    pieces: [],
+    forexPanels: [],
+    annotations: [],
+  });
+  const { set: setDoc, undo, redo, canUndo, canRedo, transact } = doc;
+  const own = doc.value;
+
+  // Geteilter Plan (#plan=…): Nur-Lesen-Ansicht. Solange er offen ist, kommen alle Anzeigen aus view;
+  // der eigene Entwurf (own) bleibt unberührt und wird nur für Autosave, Plan-Datei und Stände genutzt.
+  const sharedParsed = useMemo(() => (shared ? parseKastenbuehneFile(shared) : null), [shared]);
+  const sharedView = sharedParsed?.ok === true;
+  const view = useMemo<KastenbuehneDoc>(
+    () =>
+      sharedParsed?.ok
+        ? {
+            heightCm: sharedParsed.value.heightCm ?? STRUCTURE_RULES.buehne.heightOptionsCm[0],
+            pieces: sharedParsed.value.pieces,
+            forexPanels: sharedParsed.value.forexPanels ?? [],
+            room: sharedParsed.value.room,
+            annotations: sharedParsed.value.annotations ?? [],
+          }
+        : own,
+    [sharedParsed, own],
+  );
+  const { heightCm, pieces, forexPanels, room, annotations } = view;
+  const setHeightCm = (v: number) => doc.set((d) => setDocField(d, 'heightCm', v));
+  const setForexPanels = (u: ForexPanel[] | ((p: ForexPanel[]) => ForexPanel[])) =>
+    doc.set((d) => setDocField(d, 'forexPanels', u));
+
+  const editorProps = useMemo(
+    () =>
+      createPieceLayerProps(pieces, (u) => setDoc((d) => setDocField(d, 'pieces', u)), {
+        undo,
+        redo,
+        canUndo,
+        canRedo,
+        transact,
+      }),
+    [pieces, setDoc, undo, redo, canUndo, canRedo, transact],
+  );
 
   // Alles Abgeleitete (Kennzahlen, Grundriss, 3D, PPTX, Materialliste) sieht die Bühne an (0,0) —
   // wo sie auf der Zeichenfläche liegt ("Alles verschieben"), soll dort nichts verändern. Der
   // Editor selbst bekommt weiter die echten Positionen.
-  const normalizedPieces = useMemo(() => normalizeToOrigin(layer.pieces), [layer.pieces]);
+  const normalizedPieces = useMemo(() => normalizeToOrigin(pieces), [pieces]);
   const layout = useMemo(() => buildLayoutFromPieces(normalizedPieces), [normalizedPieces]);
+  // Notizen liegen in den Koordinaten der Zeichenfläche; für den Export um dieselbe Verschiebung
+  // wie die normalisierten Stücke zurücksetzen, sonst säßen sie neben der Fläche.
+  const exportAnnotations = useMemo(() => {
+    const origin = boundingBoxOf(pieces);
+    return origin ? shiftAnnotations(annotations, -origin.x, -origin.y) : annotations;
+  }, [pieces, annotations]);
 
   // Forex-Blenden hängen per pieceId an einer Kante. Liegt dort (nach Verschieben/Löschen) kein
   // freies Podest mehr, fallen sie aus 3D, Materialliste und Export heraus.
-  const [forexPanels, setForexPanels] = useState<ForexPanel[]>([]);
   const placedForex = useMemo(() => placeForexPanels(normalizedPieces, forexPanels), [normalizedPieces, forexPanels]);
   const activeForexPanels = useMemo(() => placedForex.map((f) => f.panel), [placedForex]);
+  // Blenden des eigenen Entwurfs (für Autosave, Plan-Datei und Stände), unabhängig von einem geteilten Plan.
+  const ownActiveForex = useMemo(
+    () => placeForexPanels(normalizeToOrigin(own.pieces), own.forexPanels).map((f) => f.panel),
+    [own],
+  );
 
   // Druckbilder je ForexPanel.id — nur lokal (IndexedDB), nie in der Plan-Datei.
   const [forexPrints, setForexPrints] = useState<ForexPrints>({});
@@ -76,7 +154,11 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
     void saveForexPrints('kastenbuehne', forexPrints);
   }, [forexPrints]);
   // Drucke entfernter Blenden fallen weg (Blenden an gerade belegten Kanten behalten ihren Druck).
-  const visiblePrints = useMemo(() => pruneForexPrints(forexPrints, forexPanels), [forexPrints, forexPanels]);
+  // Im geteilten Plan gibt es keine Drucke: die gehören zum eigenen Entwurf.
+  const visiblePrints = useMemo(
+    () => (sharedView ? {} : pruneForexPrints(forexPrints, own.forexPanels)),
+    [forexPrints, own.forexPanels, sharedView],
+  );
 
   async function handleUploadPrint(group: ForexPrintGroup, file: File) {
     const parts = await slicePrint(file, group.panels.map((p) => p.edge.lengthM));
@@ -116,37 +198,110 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
     [podestMaterialList, normalizedPieces, forexPanels, heightCm],
   );
 
-  const hasContent = layer.pieces.length > 0;
+  const hasContent = pieces.length > 0;
+
+  // Stücke auf Hindernissen oder außerhalb des Raums (nur mit Raum). Der Raum liegt in denselben
+  // Koordinaten wie der Editor, daher wird gegen die echten Positionen geprüft, nicht gegen normalizedPieces.
+  const roomConflictCount = useMemo(() => {
+    const outside = new Set(piecesOutsideRoom(pieces, room).map((p) => p.id));
+    for (const p of pieces) {
+      if (obstaclesOverlapping([p], room).length > 0) outside.add(p.id);
+    }
+    return outside.size;
+  }, [pieces, room]);
+
+  // Import-Bericht: verworfene Stücke/Blenden und neu vergebene IDs aus dem letzten Laden
+  const [importNotes, setImportNotes] = useState<string[]>([]);
 
   function applySavedState(data: unknown): string | null {
     const result = parseKastenbuehneFile(data);
     if (!result.ok) {
+      setImportNotes([]);
       return result.error;
     }
-    if (result.value.heightCm !== undefined) setHeightCm(result.value.heightCm);
-    layer.replace(result.value.pieces);
-    setForexPanels(result.value.forexPanels ?? []);
+    setImportNotes(result.warnings);
+    const v = result.value;
+    // Import ist ein einziger Undo-Schritt: Höhe, Stücke und Blenden zusammen.
+    doc.set((d) => ({
+      heightCm: v.heightCm ?? d.heightCm,
+      pieces: v.pieces,
+      forexPanels: v.forexPanels ?? [],
+      room: v.room,
+      annotations: v.annotations ?? [],
+    }));
     return null;
   }
 
-  // forexPanels nur mitschreiben, wenn es welche gibt — Dateien ohne Blenden bleiben wie bisher.
-  const currentSavedState: KastenbuehneSavedState =
-    activeForexPanels.length > 0
-      ? { heightCm, pieces: layer.pieces, forexPanels: activeForexPanels }
-      : { heightCm, pieces: layer.pieces };
+  // Laden aus Datei oder Stand ändert den eigenen Entwurf: dann die geteilte Ansicht verlassen, damit das Ergebnis sichtbar ist.
+  function applyOwnState(data: unknown): string | null {
+    const error = applySavedState(data);
+    if (!error && sharedView) onLeaveShared?.();
+    return error;
+  }
+
+  // forexPanels und room nur mitschreiben, wenn es welche gibt — Dateien ohne Blenden/Raum bleiben wie bisher.
+  // Immer aus dem eigenen Entwurf, auch wenn gerade ein geteilter Plan angezeigt wird.
+  const currentSavedState: KastenbuehneSavedState = {
+    schemaVersion: PLAN_SCHEMA_VERSION,
+    kind: 'kastenbuehne',
+    heightCm: own.heightCm,
+    pieces: own.pieces,
+    ...(ownActiveForex.length > 0 ? { forexPanels: ownActiveForex } : {}),
+    ...(own.room ? { room: own.room } : {}),
+    ...(own.annotations.length > 0 ? { annotations: own.annotations } : {}),
+  };
 
   function handleToggleForex(pieceId: string, side: ForexSide) {
     setForexPanels((prev) => toggleForexPanel(prev, pieceId, side));
   }
-  const { restored, discard } = useDraftAutosave('kastenbuehne', currentSavedState, applySavedState);
+  const { restored, discard, saveError, otherTabChanged, reloadFromOtherTab, dismissOtherTab } = useDraftAutosave(
+    'kastenbuehne',
+    currentSavedState,
+    applySavedState,
+  );
 
   return (
     <div className="space-y-6">
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-semibold text-[var(--color-text)]">Kastenbühne</h2>
-          <PlanFileBar namespace="kastenbuehne" currentData={currentSavedState} onLoad={applySavedState} />
+          <PlanFileBar
+            namespace="kastenbuehne"
+            currentData={currentSavedState}
+            onLoad={applyOwnState}
+            shareKind="kastenbuehne"
+          />
         </div>
+        {sharedParsed?.ok && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-accent)]">
+            <span>Geteilter Plan – Nur-Lesen-Ansicht. Dein eigener Entwurf bleibt unverändert.</span>
+            <div className="flex shrink-0 gap-3 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!applySavedState(shared)) onLeaveShared?.();
+                }}
+                className="underline"
+              >
+                In meinen Plan übernehmen
+              </button>
+              <button type="button" onClick={onLeaveShared} className="underline">
+                Schließen
+              </button>
+            </div>
+          </div>
+        )}
+        {sharedParsed && !sharedParsed.ok && (
+          <WarningBanner>
+            <span>{sharedParsed.error}</span>{' '}
+            <button type="button" onClick={onLeaveShared} className="text-xs underline">
+              Schließen
+            </button>
+          </WarningBanner>
+        )}
+        {importNotes.length > 0 && (
+          <WarningBanner onDismiss={() => setImportNotes([])}>Import-Bericht: {importNotes.join(' ')}</WarningBanner>
+        )}
         {restored && (
           <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-accent)]">
             <span>Letzter Stand automatisch wiederhergestellt.</span>
@@ -154,15 +309,27 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
               type="button"
               onClick={() => {
                 discard();
-                layer.replace([]);
-                setForexPanels([]);
+                doc.set({ heightCm: STRUCTURE_RULES.buehne.heightOptionsCm[0], pieces: [], forexPanels: [], room: undefined, annotations: [] });
                 setForexPrints({});
-                setHeightCm(STRUCTURE_RULES.buehne.heightOptionsCm[0]);
               }}
               className="shrink-0 text-xs underline"
             >
               Verwerfen
             </button>
+          </div>
+        )}
+        {saveError && <WarningBanner>{saveError}</WarningBanner>}
+        {otherTabChanged && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--color-warning)] px-3 py-2 text-sm text-[var(--color-warning)]">
+            <span>Dieser Plan wurde in einem anderen Tab geändert.</span>
+            <div className="flex shrink-0 gap-3 text-xs">
+              <button type="button" onClick={reloadFromOtherTab} className="underline">
+                Stand aus dem anderen Tab laden
+              </button>
+              <button type="button" onClick={dismissOtherTab} className="underline">
+                Hier weiterarbeiten
+              </button>
+            </div>
           </div>
         )}
         <p className="text-sm text-[var(--color-text-muted)]">
@@ -172,36 +339,125 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-[var(--color-text)]">Aufbau per Drag & Drop</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-[var(--color-text)]">Aufbau per Drag & Drop</h2>
+          {!sharedView && (
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => setStageLocked((v) => !v)}
+                aria-pressed={stageLocked}
+                title="Gesperrte Bühne: Stücke bleiben sichtbar, lassen sich aber nicht bearbeiten"
+                className={ACTION_BTN}
+              >
+                {stageLocked ? 'Bühne entsperren' : 'Bühne sperren'}
+              </button>
+            </div>
+          )}
+        </div>
         <div className="flex flex-wrap items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5">
           <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Höhe</span>
-          <HeightSelector heightOptionsCm={STRUCTURE_RULES.buehne.heightOptionsCm} valueCm={heightCm} onChange={setHeightCm} />
+          {sharedView ? (
+            <span className="text-sm font-semibold tabular-nums text-[var(--color-text)]">{heightCm} cm</span>
+          ) : (
+            <HeightSelector heightOptionsCm={STRUCTURE_RULES.buehne.heightOptionsCm} valueCm={heightCm} onChange={setHeightCm} />
+          )}
           <span className="text-xs text-[var(--color-text-muted)]">
             Fußtyp: Alu-Lastenverteilerfuß (LV-Fuß), Höhenserie 20–200 cm
           </span>
         </div>
+        <details className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5">
+          <summary className="cursor-pointer text-sm font-semibold text-[var(--color-text)]">
+            Raum & Hindernisse
+            {room && (
+              <span className="ml-2 text-xs font-normal text-[var(--color-text-muted)]">
+                {formatMeters(room.widthM)} × {formatMeters(room.depthM)} m, {room.obstacles.length} Hindernisse
+              </span>
+            )}
+          </summary>
+          {!sharedView && (
+            <div className="mt-3">
+              <RoomPanel room={room} onChange={(r) => doc.set((d) => setDocField(d, 'room', r))} />
+            </div>
+          )}
+        </details>
+        {roomConflictCount > 0 && (
+          <WarningBanner>
+            {roomConflictCount === 1 ? '1 Stück liegt' : `${roomConflictCount} Stücke liegen`} auf Hindernissen oder
+            außerhalb des Raums.
+          </WarningBanner>
+        )}
         <PieceCanvasEditor
-          {...layer.editorProps}
+          {...editorProps}
+          locked={stageLocked}
+          readOnly={sharedView}
+          room={room}
+          annotations={annotations}
+          onAnnotationsChange={(a) => setDoc((d) => setDocField(d, 'annotations', a))}
           frontEdgeLabel="Vorderkante"
+          emptyHint={
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <span className="w-full text-xs font-semibold">Oder mit einer Vorlage starten:</span>
+              {STAGE_TEMPLATES.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={ACTION_BTN}
+                  onClick={() => editorProps.onReplaceAll(t.build().map((p) => ({ ...p, id: makePieceId() })))}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          }
         />
-        <PlacedPiecesChips pieces={layer.pieces} onRemovePiece={layer.editorProps.onRemovePiece} />
+        {/* Gesperrte Bühne: keine Entfernen-Chips, sonst ließe sich die Sperre umgehen. */}
+        {!sharedView && !stageLocked && <PlacedPiecesChips pieces={pieces} onRemovePiece={editorProps.onRemovePiece} />}
       </section>
 
       {hasContent && (
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold text-[var(--color-text)]">Forex-Blenden</h2>
-          <ForexEdgeEditor
-            pieces={normalizedPieces}
-            forexPanels={activeForexPanels}
-            placed={placedForex}
-            prints={visiblePrints}
-            onToggle={handleToggleForex}
-            onUploadPrint={handleUploadPrint}
-            onRemovePrint={handleRemovePrint}
-            onSetPrintGroup={handleSetPrintGroup}
-            onAllFrontEdges={() => setForexPanels((prev) => addAllFrontEdges(normalizedPieces, prev))}
-            onClear={() => setForexPanels([])}
-          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold text-[var(--color-text)]">Forex-Blenden</h2>
+            {!sharedView && (
+              <button
+                type="button"
+                onClick={() => setForexHidden((v) => !v)}
+                aria-pressed={forexHidden}
+                title="Blenden nur ausblenden: Plan-Datei und Materialliste bleiben vollständig; das 3D-Bild im Export zeigt die aktuelle Ansicht"
+                className={ACTION_BTN}
+              >
+                {forexHidden ? 'Forex-Blenden einblenden' : 'Forex-Blenden ausblenden'}
+              </button>
+            )}
+          </div>
+          {sharedView ? (
+            <p className="text-sm text-[var(--color-text-muted)]">
+              {activeForexPanels.length === 0
+                ? 'Keine Forex-Blenden im geteilten Plan.'
+                : `${activeForexPanels.length} Forex-Blenden im geteilten Plan – nur Ansicht, in 3D, Materialliste und Export enthalten.`}
+            </p>
+          ) : forexHidden ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-muted)]">
+              <span>Forex-Blenden ausgeblendet. Sie bleiben in Plan-Datei und Materialliste erhalten, fehlen aber in 3D und im 3D-Bild des Exports.</span>
+              <button type="button" onClick={() => setForexHidden(false)} className="text-xs underline text-[var(--color-accent)]">
+                Einblenden
+              </button>
+            </div>
+          ) : (
+            <ForexEdgeEditor
+              pieces={normalizedPieces}
+              forexPanels={activeForexPanels}
+              placed={placedForex}
+              prints={visiblePrints}
+              onToggle={handleToggleForex}
+              onUploadPrint={handleUploadPrint}
+              onRemovePrint={handleRemovePrint}
+              onSetPrintGroup={handleSetPrintGroup}
+              onAllFrontEdges={() => setForexPanels((prev) => addAllFrontEdges(normalizedPieces, prev))}
+              onClear={() => setForexPanels([])}
+            />
+          )}
         </section>
       )}
 
@@ -243,12 +499,25 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
                 </button>
               ))}
             </div>
+            <label className="flex items-center gap-1.5 text-sm text-[var(--color-text)]">
+              <input type="checkbox" checked={showPlanDims} onChange={(e) => setShowPlanDims(e.target.checked)} />
+              Maßketten
+            </label>
             <ExportButtons
               materialList={materialList}
               getCanvas={getCanvas}
               filenamePrefix="kastenbuehne"
               pptx={{
-                sections: [{ layout, feet: labeledFeet, heightCm, label: 'Kastenbühne' }],
+                sections: [
+                  {
+                    layout,
+                    feet: labeledFeet,
+                    heightCm,
+                    label: 'Kastenbühne',
+                    showDimensions: showPlanDims,
+                    annotations: exportAnnotations,
+                  },
+                ],
                 title: 'Kastenbühne',
                 ci,
               }}
@@ -267,12 +536,14 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
           )}
 
           {(resultTab === 'grundriss' || resultTab === '3d') && <FootColorLegend heights={[heightCm]} />}
-          {resultTab === 'grundriss' && <FloorPlanSVG layout={layout} feet={labeledFeet} heightCm={heightCm} />}
+          {resultTab === 'grundriss' && (
+            <FloorPlanSVG layout={layout} feet={labeledFeet} heightCm={heightCm} showDimensions={showPlanDims} />
+          )}
           {/* AufbauScene3D bleibt unabhängig vom aktiven Tab immer gemountet — der PNG-Export
               braucht die live WebGL-Canvas-Referenz, die beim Unmounten verloren ginge. */}
           <div className={resultTab === '3d' ? '' : 'hidden'}>
             <AufbauScene3D
-              tiers={[{ layout, feet: labeledFeet, heightM: heightCm / 100, forex: placedForex, forexPrints: visiblePrints }]}
+              tiers={[{ layout, feet: labeledFeet, heightM: heightCm / 100, forex: forexHidden && !sharedView ? [] : placedForex, forexPrints: visiblePrints }]}
               onCanvasReady={onCanvasReady}
             />
           </div>
@@ -283,7 +554,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold text-[var(--color-text)]">Im Browser gespeichert</h2>
-        <SavedConfigsPanel namespace="kastenbuehne" currentData={currentSavedState} onLoad={applySavedState} />
+        <SavedConfigsPanel namespace="kastenbuehne" currentData={currentSavedState} onLoad={applyOwnState} />
       </section>
     </div>
   );

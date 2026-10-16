@@ -69,6 +69,15 @@ Am saubersten wäre ein kleiner, gemeinsamer JSON-Austausch, der genau `Piece2D`
 
 Die Stadthallen-Software könnte dann spiegelbildlich: ihre eigene Palette um "NivTec-Katalogstücke" (die Tabelle oben) erweitern, ein ausgewähltes Stück als `{x, y, w, d, corner?}` in ihren eigenen Metern-Plan einfügen, und umgekehrt eine solche NivTec-JSON-Datei importieren, um einen kompletten NivTec-Aufbau (Bühne oder Theke) als Gruppe von Stücken in die Gesamtplanung zu übernehmen.
 
+## Dateiformat: Version und Typ
+
+Neue Plan-Dateien (Bühne und Tresen) enthalten zusätzlich:
+
+- `schemaVersion`: die Version des Dateiformats (aktuell `1`).
+- `kind`: der Plan-Typ, `'kastenbuehne'` oder `'tresen'`.
+
+Beide Felder sind optional. Leser dürfen sie ignorieren; alle anderen Felder bleiben unverändert. Dateien ohne `schemaVersion` gelten als Version 0 und laden unverändert.
+
 ## Forex-Blenden (Kastenbühne)
 
 Die Kastenbühnen-Datei (`nivtec-kastenbuehne.json`) kann optional Forex-Blenden enthalten — bedruckte 5-mm-PVC-Hartschaumplatten vor freien Außenkanten. Ältere Dateien ohne das Feld laden unverändert.
@@ -92,3 +101,27 @@ interface ForexPanel {
 - Exportiert werden nur Blenden an Kanten, die im aktuellen Plan frei sind (kein Nachbarpodest liegt an). Druckbilder sind nie Teil der Datei.
 - Drucke lassen sich im NivTec-Tool wie in der Stadthallenplanung hochladen: je Platte oder je `printGroup` (ein Bild wird von außen gesehen links → rechts über die Platten verteilt, gleiche Schnitt- und Sortierlogik). Sie liegen nur lokal im Browser (IndexedDB, je `ForexPanel.id`) und dienen der 3D-Vorschau. „Alle Vorderkanten“ setzt `printGroup: 'vorne'`.
 - Zuschnitt in der Materialliste: Kantenlänge × (Bauhöhe − 10 mm), z. B. „Forex 2000 × 590 mm, 5 mm“ bei 60 cm.
+
+## Raumkontur (optionales Feld `room`)
+
+Bühne und Tresen können optional eine Raumkontur mit Hindernissen speichern. Der Raum dient nur der Planung im Editor: Er bestimmt, wo Stücke liegen dürfen, und fließt nicht in Grundriss, 3D, Materialliste oder PPTX ein. Leser dürfen das Feld ignorieren; alte Dateien ohne `room` bleiben gültig.
+
+```ts
+interface RoomPlan {
+  widthM: number              // Breite in Metern, > 0 (höchstens 500)
+  depthM: number              // Tiefe in Metern, > 0 (höchstens 500)
+  obstacles: RoomObstacle[]
+}
+interface RoomObstacle {
+  id: string                  // eindeutig im Raum, z. B. "ob-1"
+  kind: 'saeule' | 'tuer' | 'notausgang'
+  x: number                   // Ursprung oben links wie im Plan, x von links
+  y: number                   // y von der Vorderkante nach hinten
+  w: number                   // Breite in Metern, > 0
+  d: number                   // Tiefe in Metern, > 0
+  label?: string              // optionale Bezeichnung, höchstens 80 Zeichen
+}
+```
+
+- Beim Import werden ungültige Hindernisse einzeln verworfen (unbekannte Art, doppelte ID, negative Position, Maße ≤ 0); ein ungültiger Raum (Breite oder Tiefe) wird ganz ignoriert.
+- Beim Tresen gilt der Raum nur für den Unterbau. Die Thekenplatte steht auf dem Unterbau und wird nicht gegen den Raum geprüft.

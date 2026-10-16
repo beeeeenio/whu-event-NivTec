@@ -5,6 +5,7 @@ import { materialListToCsv } from '../../lib/csv';
 import { downloadTextFile } from '../../lib/download';
 import { exportCanvasAsPng } from '../../lib/canvasExport';
 import { exportLayoutAsPptx, exportSectionsAsPptx, type PptxSection } from '../../lib/pptxExport';
+import { ScaledPlanExport } from './ScaledPlanExport';
 
 export interface PptxExportData {
   sections: PptxSection[];
@@ -48,15 +49,24 @@ export function ExportButtons({ materialList, getCanvas, filenamePrefix, pptx }:
     if (!pptx) return;
     if (pptx.sections.length === 1) {
       const s = pptx.sections[0];
-      await exportLayoutAsPptx(s.layout, s.feet, s.heightCm, `${filenamePrefix}-grundriss.pptx`, pptx.ci, pptx.title);
+      await exportLayoutAsPptx(
+        s.layout,
+        s.feet,
+        s.heightCm,
+        `${filenamePrefix}-grundriss.pptx`,
+        pptx.ci,
+        pptx.title,
+        { showDimensions: s.showDimensions, annotations: s.annotations },
+        materialList,
+      );
     } else {
-      await exportSectionsAsPptx(pptx.sections, `${filenamePrefix}-grundriss.pptx`, pptx.ci, pptx.title);
+      await exportSectionsAsPptx(pptx.sections, `${filenamePrefix}-grundriss.pptx`, pptx.ci, pptx.title, materialList);
     }
   }
 
   return (
     <div className="space-y-1">
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <button
           type="button"
           onClick={handleCsvExport}
@@ -81,6 +91,14 @@ export function ExportButtons({ materialList, getCanvas, filenamePrefix, pptx }:
           </button>
         )}
       </div>
+      {pptx && (
+        <ScaledPlanExport
+          sections={pptx.sections}
+          title={pptx.title}
+          filenamePrefix={filenamePrefix}
+          materialList={materialList}
+        />
+      )}
       {exportError && <p className="text-xs text-[var(--color-danger)]">{exportError}</p>}
     </div>
   );

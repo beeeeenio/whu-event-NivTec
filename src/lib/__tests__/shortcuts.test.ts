@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isEditableTarget, undoRedoAction, type KeyLike } from '../shortcuts';
+import { editorShortcut, isEditableTarget, undoRedoAction, type KeyLike } from '../shortcuts';
 
 function key(partial: Partial<KeyLike> & { key: string }): KeyLike {
   return { ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...partial };
@@ -55,5 +55,43 @@ describe('isEditableTarget', () => {
     expect(isEditableTarget({ tagName: 'BUTTON' })).toBe(false);
     expect(isEditableTarget(null)).toBe(false);
     expect(isEditableTarget(undefined)).toBe(false);
+  });
+});
+
+describe('editorShortcut', () => {
+  it('erkennt Strg+A als alles auswählen', () => {
+    expect(editorShortcut(key({ key: 'a', ctrlKey: true }))).toBe('selectAll');
+  });
+
+  it('erkennt Cmd+D als Duplizieren', () => {
+    expect(editorShortcut(key({ key: 'd', metaKey: true }))).toBe('duplicate');
+  });
+
+  it('erkennt Strg+C, Strg+X und Strg+V als Kopieren, Ausschneiden und Einfügen', () => {
+    expect(editorShortcut(key({ key: 'c', ctrlKey: true }))).toBe('copy');
+    expect(editorShortcut(key({ key: 'x', ctrlKey: true }))).toBe('cut');
+    expect(editorShortcut(key({ key: 'v', ctrlKey: true }))).toBe('paste');
+  });
+
+  it('ignoriert Strg+Umschalt+D', () => {
+    expect(editorShortcut(key({ key: 'd', ctrlKey: true, shiftKey: true }))).toBeNull();
+  });
+
+  it('ignoriert Alt+Strg+A', () => {
+    expect(editorShortcut(key({ key: 'a', ctrlKey: true, altKey: true }))).toBeNull();
+  });
+
+  it('ignoriert Eingaben während IME-Komposition', () => {
+    expect(editorShortcut(key({ key: 'a', ctrlKey: true, isComposing: true }))).toBeNull();
+  });
+
+  it('liefert Undo und Redo aus undoRedoAction', () => {
+    expect(editorShortcut(key({ key: 'z', ctrlKey: true }))).toBe('undo');
+    expect(editorShortcut(key({ key: 'z', ctrlKey: true, shiftKey: true }))).toBe('redo');
+  });
+
+  it('ignoriert Buchstaben ohne Modifier', () => {
+    expect(editorShortcut(key({ key: 'a' }))).toBeNull();
+    expect(editorShortcut(key({ key: 'd' }))).toBeNull();
   });
 });

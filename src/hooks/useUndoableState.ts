@@ -1,23 +1,27 @@
 import { useCallback, useRef, useState } from 'react';
-import { applyChange, createHistory, redoHistory, undoHistory, type History } from '../lib/history';
+import { applyChange, beginTx, createHistory, createTxCounter, endTx, redoHistory, txIdForSet, undoHistory, type History } from '../lib/history';
 
 export function useUndoableState<T>(initial: T) {
   const [history, setHistory] = useState<History<T>>(() => createHistory(initial));
-  const tx = useRef({ id: 0, open: false });
+  const tx = useRef(createTxCounter());
 
+  // Jeder set()-Aufruf außerhalb von transact ist ein eigener Undo-Schritt.
   const set = useCallback((updater: T | ((prev: T) => T)) => {
-    if (!tx.current.open) {
-      tx.current.id += 1;
-      tx.current.open = true;
-      queueMicrotask(() => {
-        tx.current.open = false;
-      });
-    }
-    const txId = tx.current.id;
+    const txId = txIdForSet(tx.current);
     setHistory((h) => {
       const next = typeof updater === 'function' ? (updater as (prev: T) => T)(h.present) : updater;
       return applyChange(h, next, txId);
     });
+  }, []);
+
+  // Bündelt alle set()-Aufrufe in fn zu einem Undo-Schritt.
+  const transact = useCallback((fn: () => void) => {
+    beginTx(tx.current);
+    try {
+      fn();
+    } finally {
+      endTx(tx.current);
+    }
   }, []);
 
   const undo = useCallback(() => setHistory((h) => undoHistory(h)), []);
@@ -26,6 +30,7 @@ export function useUndoableState<T>(initial: T) {
   return {
     value: history.present,
     set,
+    transact,
     undo,
     redo,
     canUndo: history.past.length > 0,

@@ -15,7 +15,7 @@ import type { LayoutResult, PanelInstance, PieceShape, TriangleCorner } from './
 
 const EPS = 1e-6;
 const GRID_M = 0.5;
-const EDGE_SNAP_TOLERANCE_M = 0.2;
+export const EDGE_SNAP_TOLERANCE_M = 0.2;
 
 function round3(v: number): number {
   return Math.round(v * 1000) / 1000;
@@ -28,9 +28,9 @@ function snapToGrid(v: number): number {
 /** Rastet v (Anfangskoordinate eines Stücks der Länge size) auf die nächste Kante vorhandener
  *  Stücke (Anfang an Ende/Anfang, Ende an Anfang/Ende), wenn sie näher als die Toleranz liegt;
  *  sonst aufs 0,5-m-Raster. */
-function snapCoord(v: number, size: number, edges: number[]): number {
+function snapCoord(v: number, size: number, edges: number[], toleranceM = EDGE_SNAP_TOLERANCE_M): number {
   let bestCandidate: number | null = null;
-  let bestDistance = EDGE_SNAP_TOLERANCE_M;
+  let bestDistance = toleranceM;
 
   for (const edge of edges) {
     const candidates = [edge, edge - size];
@@ -184,6 +184,12 @@ function isWithinCanvas(x: number, y: number): boolean {
   return x >= -EPS && y >= -EPS;
 }
 
+/** Optionale Einstellungen für die Platzsuche — z. B. eine aus Bildschirm-Pixeln umgerechnete Fangweite. */
+export interface PlacementOptions {
+  /** Kanten-Fangweite in Metern, z. B. aus 8 Bildschirm-px umgerechnet. */
+  snapToleranceM?: number;
+}
+
 /**
  * Sucht die nächstgelegene freie, rasterkonforme (x,y)-Position für ein Stück (w,d): testet
  * zuerst die gewünschte (gerasterte) Position, dann wachsende quadratische Ringe im 0,5-m-
@@ -201,7 +207,9 @@ export function findFreePosition(
   desiredX: number,
   desiredY: number,
   excludeId?: string,
+  options?: PlacementOptions,
 ): { x: number; y: number } {
+  const snapToleranceM = options?.snapToleranceM ?? EDGE_SNAP_TOLERANCE_M;
   // Baue Kanten-Listen aus bestehenden Stücken
   const xEdges = existing
     .filter((p) => p.id !== excludeId)
@@ -211,8 +219,8 @@ export function findFreePosition(
     .flatMap((p) => [p.y, p.y + p.d]);
 
   // Versuche Kanten-Rastern mit Fallback auf Grid
-  const dx = Math.max(0, snapCoord(desiredX, w, xEdges));
-  const dy = Math.max(0, snapCoord(desiredY, d, yEdges));
+  const dx = Math.max(0, snapCoord(desiredX, w, xEdges, snapToleranceM));
+  const dy = Math.max(0, snapCoord(desiredY, d, yEdges, snapToleranceM));
   const candidateOk = (x: number, y: number) => isWithinCanvas(x, y) && fitsAt(existing, x, y, w, d, excludeId);
 
   if (candidateOk(dx, dy)) return { x: dx, y: dy };
@@ -232,6 +240,21 @@ export function findFreePosition(
   }
   // Laut obigem Argument unerreichbar, aber als Sicherheitsnetz: rechts neben allem Bestehenden.
   return { x: snapToGrid(existing.reduce((m, p) => Math.max(m, p.x + p.w), 0)), y: dy };
+}
+
+/** Alt-Taste: freie Lage ohne Kanten-/Rasterfang und ohne Nachrücken (auf cm gerundet, nie negativ).
+ *  valid=false, wenn das Stück dort ein anderes überlappen würde — der Aufrufer zeigt das rot an und legt nicht ab. */
+export function placeUnsnapped(
+  existing: Piece2D[],
+  w: number,
+  d: number,
+  desiredX: number,
+  desiredY: number,
+  excludeId?: string,
+): { x: number; y: number; valid: boolean } {
+  const x = Math.max(0, Math.round(desiredX * 100) / 100);
+  const y = Math.max(0, Math.round(desiredY * 100) / 100);
+  return { x, y, valid: fitsAt(existing, x, y, w, d, excludeId) };
 }
 
 /**
