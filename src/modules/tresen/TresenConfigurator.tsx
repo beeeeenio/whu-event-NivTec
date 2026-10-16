@@ -16,6 +16,8 @@ import { buildMaterialList, mergeMaterialLists } from '../../domain/materialList
 import { isBracingRequired, STRUCTURE_RULES } from '../../domain/rules';
 import { SPINDEL_HEIGHT_OPTIONS_CM } from '../../domain/tresen';
 import { CATALOG_DEPTHS_M } from '../../domain/panels';
+import { TRESEN_TEMPLATES } from '../../domain/templates';
+import { ACTION_BTN } from '../../components/shared/editor/styles';
 import { parseTresenFile, type TresenSavedState } from '../../domain/savedState';
 import { PLAN_SCHEMA_VERSION } from '../../domain/migrations';
 import { formatMeters } from '../../lib/format';
@@ -261,6 +263,31 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
           frontEdgeLabel="Unterbau-Vorderkante"
           minCanvasWidthM={sharedCanvasWidthM}
           referenceFootprint={topBoundingBox ? { ...topBoundingBox, label: 'Thekenplatte' } : undefined}
+          emptyHint={
+            hasContent ? undefined : (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <span className="w-full text-xs font-semibold">Oder mit einer Vorlage starten (Unterbau und Platte):</span>
+                {TRESEN_TEMPLATES.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    className={ACTION_BTN}
+                    onClick={() => {
+                      // Beide Ebenen in EINEM Schritt setzen — ein Undo macht die ganze Vorlage rückgängig.
+                      const { base, top } = t.build();
+                      doc.set((d) => ({
+                        ...d,
+                        basePieces: base.map((p) => ({ ...p, id: makePieceId() })),
+                        topPieces: top.map((p) => ({ ...p, id: makePieceId() })),
+                      }));
+                    }}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            )
+          }
         />
         <PlacedPiecesChips pieces={basePieces} onRemovePiece={baseEditorProps.onRemovePiece} />
       </section>

@@ -12,7 +12,7 @@ import { SavedConfigsPanel } from '../../components/shared/SavedConfigsPanel';
 import { StairsRampCalculator } from '../../components/shared/StairsRampCalculator';
 import { SummaryStats } from '../../components/shared/SummaryStats';
 import { WarningBanner } from '../../components/shared/WarningBanner';
-import { buildLayoutFromPieces, normalizeToOrigin } from '../../domain/customShape';
+import { buildLayoutFromPieces, makePieceId, normalizeToOrigin } from '../../domain/customShape';
 import {
   addAllFrontEdges,
   appendMaterialItems,
@@ -39,6 +39,8 @@ import type { CiId } from '../../lib/ci';
 import { setDocField, type KastenbuehneDoc } from '../../domain/planDocument';
 import type { ForexPanel, ForexSide } from '../../domain/types';
 import { ForexEdgeEditor } from './ForexEdgeEditor';
+import { STAGE_TEMPLATES } from '../../domain/templates';
+import { ACTION_BTN } from '../../components/shared/editor/styles';
 
 type ResultTab = 'kennzahlen' | 'grundriss' | '3d' | 'material';
 
@@ -236,6 +238,21 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
         <PieceCanvasEditor
           {...editorProps}
           frontEdgeLabel="Vorderkante"
+          emptyHint={
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <span className="w-full text-xs font-semibold">Oder mit einer Vorlage starten:</span>
+              {STAGE_TEMPLATES.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={ACTION_BTN}
+                  onClick={() => editorProps.onReplaceAll(t.build().map((p) => ({ ...p, id: makePieceId() })))}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          }
         />
         <PlacedPiecesChips pieces={pieces} onRemovePiece={editorProps.onRemovePiece} />
       </section>
