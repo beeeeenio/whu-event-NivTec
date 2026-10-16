@@ -10,6 +10,7 @@ import { isSondermassPiece, TRIANGLE_PANEL_SIZE_M, QUARTER_CIRCLE_RADIUS_M, RECT
 import { mirrorTriangleCornerDiagonal, nextTriangleCorner, quarterCirclePath, triangleHand, trianglePoints } from '../../domain/triangle';
 import type { TriangleCorner } from '../../domain/types';
 import { formatMeters } from '../../lib/format';
+import { dragThresholdPx, isPrimaryButton, shouldRotateOnWheel } from '../../lib/pointer';
 
 type ToolPayload = { kind: 'piece'; w: number; d: number } | { kind: 'triangle'; corner: TriangleCorner; w: number; d: number } | { kind: 'viertelkreis'; corner: TriangleCorner };
 
@@ -50,7 +51,6 @@ const PAD = 0.6;
 const MIN_CANVAS_WIDTH_M = 6;
 const MIN_CANVAS_DEPTH_M = 4;
 const BUFFER_M = 2;
-const DRAG_THRESHOLD_PX = 4;
 const GRID_STEP_M = 0.5;
 
 function round1(v: number): number {
@@ -208,6 +208,7 @@ function DimensionLabel({ x, y, w, d }: { x: number; y: number; w: number; d: nu
 
 interface DragState {
   id: string;
+  pointerType: string;
   startClientX: number;
   startClientY: number;
   moved: boolean;
@@ -218,6 +219,7 @@ interface DragState {
 
 interface PaletteDragState {
   payload: ToolPayload;
+  pointerType: string;
   startClientX: number;
   startClientY: number;
   moved: boolean;
@@ -263,6 +265,8 @@ export function PieceCanvasEditor({
   // auch bei Pointer-Capture). Ein Ref statt State, damit der Wert synchron und ohne
   // Render-Verzögerung im direkt danach feuernden `onClick` verfügbar ist.
   const suppressNextClickRef = useRef(false);
+  // Zeitpunkt (ms) der letzten Drehung per Mausrad, für die Drosselung während eines Paletten-Ziehens.
+  const lastWheelRotateRef = useRef<number | null>(null);
 
   function arm(payload: ToolPayload | null) {
     setArmedState(payload);
@@ -351,6 +355,7 @@ export function PieceCanvasEditor({
   }
 
   function handlePaletteButtonPointerDown(e: React.PointerEvent<HTMLButtonElement>, payload: ToolPayload) {
+    if (!isPrimaryButton(e)) return;
     suppressNextClickRef.current = false;
     arm(null);
     try {
@@ -358,12 +363,12 @@ export function PieceCanvasEditor({
     } catch {
       // best-effort, siehe bestehendes Muster bei handlePiecePointerDown
     }
-    setPaletteDrag({ payload, startClientX: e.clientX, startClientY: e.clientY, moved: false, overCanvas: false });
+    setPaletteDrag({ payload, pointerType: e.pointerType, startClientX: e.clientX, startClientY: e.clientY, moved: false, overCanvas: false });
   }
 
   function handlePaletteButtonPointerMove(e: React.PointerEvent<HTMLButtonElement>) {
     if (!paletteDrag) return;
-    if (Math.hypot(e.clientX - paletteDrag.startClientX, e.clientY - paletteDrag.startClientY) < DRAG_THRESHOLD_PX) return;
+    if (Math.hypot(e.clientX - paletteDrag.startClientX, e.clientY - paletteDrag.startClientY) < dragThresholdPx(paletteDrag.pointerType)) return;
     const rect = svgRef.current?.getBoundingClientRect();
     const overCanvas = !!rect && e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
     if (overCanvas) setPointerPos(svgPointFromClient(e.clientX, e.clientY));
@@ -397,6 +402,7 @@ export function PieceCanvasEditor({
   const dragging = paletteDrag !== null;
   useEffect(() => {
     if (!dragging) return;
+    lastWheelRotateRef.current = null;
     const onKey = (e: KeyboardEvent) => {
       // Esc bricht das Paletten-Ziehen ab. suppressNextClickRef verhindert, dass der danach
       // folgende click die Kachel bewaffnet; der nächste pointerdown setzt den Ref zurück.
@@ -417,6 +423,9 @@ export function PieceCanvasEditor({
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      const now = performance.now();
+      if (!shouldRotateOnWheel(e, now, lastWheelRotateRef.current)) return;
+      lastWheelRotateRef.current = now;
       rotatePaletteDrag();
     };
     window.addEventListener('keydown', onKey);
@@ -443,6 +452,7 @@ export function PieceCanvasEditor({
   }, [pieceDragging]);
 
   function handlePiecePointerDown(e: React.PointerEvent<SVGElement>, piece: Piece2D) {
+    if (!isPrimaryButton(e)) return;
     if (armed) return;
     e.stopPropagation();
     if (e.shiftKey) {
@@ -459,6 +469,7 @@ export function PieceCanvasEditor({
     const start = svgPointFromClient(e.clientX, e.clientY);
     setDrag({
       id: piece.id,
+      pointerType: e.pointerType,
       startClientX: e.clientX,
       startClientY: e.clientY,
       moved: false,
@@ -470,7 +481,7 @@ export function PieceCanvasEditor({
   function handlePiecePointerMove(e: React.PointerEvent<SVGElement>, piece: Piece2D) {
     if (!drag || drag.id !== piece.id) return;
     const movedPx = Math.hypot(e.clientX - drag.startClientX, e.clientY - drag.startClientY);
-    if (movedPx < DRAG_THRESHOLD_PX) return;
+    if (movedPx < dragThresholdPx(drag.pointerType)) return;
     const { x, y } = svgPointFromClient(e.clientX, e.clientY);
     if (drag.group) {
       const moving = pieces.filter((p) => selectedIds.includes(p.id));
@@ -782,7 +793,8 @@ export function PieceCanvasEditor({
       <svg
         ref={svgRef}
         viewBox={viewBox}
-        className="w-full h-auto max-h-[420px] rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+        className="w-full h-auto max-h-[420px] rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] select-none"
+        style={{ touchAction: 'none' }}
         role="img"
         aria-label="Bau-Editor — klicken und dann Tastatur nutzen (Pfeiltasten, Enter, R, Entf, Esc, 1–4, T; Kurzbefehle siehe unten)"
         tabIndex={0}
@@ -836,7 +848,7 @@ export function PieceCanvasEditor({
           height={canvasDepthM}
           fill="transparent"
           pointerEvents={armed ? 'all' : 'none'}
-          onMouseMove={(e) => {
+          onPointerMove={(e) => {
             if (!armed) return;
             setPointerPos(svgPointFromClient(e.clientX, e.clientY));
           }}
