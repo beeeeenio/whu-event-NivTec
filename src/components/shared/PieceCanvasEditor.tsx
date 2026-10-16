@@ -38,6 +38,8 @@ interface Props {
   canRedo?: boolean;
   /** Leert den ganzen Plan (ersetzt den bisherigen "Zurücksetzen"-Knopf im jeweiligen Modul). */
   onClear?: () => void;
+  /** Bündelt mehrere Callback-Aufrufe zu einem Undo-Schritt. */
+  onTransact?: (fn: () => void) => void;
   /** Beschriftung über der Kante, an der y=0 liegt (z.B. "Bühnenvorderkante"). */
   frontEdgeLabel?: string;
   /** Erzwingt eine Mindest-viewBox-Breite — z.B. damit zwei Ebenen (Tresen: Unterbau +
@@ -375,6 +377,7 @@ export function PieceCanvasEditor({
   canUndo,
   canRedo,
   onClear,
+  onTransact,
   frontEdgeLabel = 'Vorderkante',
   minCanvasWidthM,
   referenceFootprint,
@@ -666,12 +669,18 @@ export function PieceCanvasEditor({
     setDrag((d) => (d ? { ...d, moved: true, target } : d));
   }
 
+  // Mehrere Callback-Aufrufe als ein Undo-Schritt (fällt ohne onTransact auf direkten Aufruf zurück).
+  function batch(fn: () => void) {
+    if (onTransact) onTransact(fn);
+    else fn();
+  }
+
   function handlePiecePointerUp(piece: Piece2D) {
     if (drag?.id === piece.id && drag.group) {
       const { dx, dy, valid } = drag.group;
       if (drag.moved && valid && (dx !== 0 || dy !== 0)) {
         if (onMovePieces) onMovePieces(selectedIds, dx, dy);
-        else pieces.filter((p) => selectedIds.includes(p.id)).forEach((p) => onMovePiece(p.id, round1(p.x + dx), round1(p.y + dy)));
+        else batch(() => pieces.filter((p) => selectedIds.includes(p.id)).forEach((p) => onMovePiece(p.id, round1(p.x + dx), round1(p.y + dy))));
       } else if (drag.moved && !valid) {
         showBlockedMessage('Dort ist kein Platz – die Auswahl würde andere Stücke überlappen. Nichts verschoben.');
       }
@@ -717,8 +726,10 @@ export function PieceCanvasEditor({
     // gedrehten Maße suchen und dorthin rücken. findFreePosition liefert für ein Einzelstück
     // immer ein Ergebnis (siehe customShape.ts), ein echter Fehlerfall entfällt damit.
     const target = findFreePosition(pieces, rotatedW, rotatedD, selectedPiece.x, selectedPiece.y, selectedPiece.id);
-    onMovePiece(selectedPiece.id, target.x, target.y);
-    onRotatePiece(selectedPiece.id);
+    batch(() => {
+      onMovePiece(selectedPiece.id, target.x, target.y);
+      onRotatePiece(selectedPiece.id);
+    });
   }
 
   function rotateCurrent() {
@@ -740,7 +751,7 @@ export function PieceCanvasEditor({
   function removeSelected() {
     if (selectedIds.length === 0) return;
     if (onRemovePieces) onRemovePieces(selectedIds);
-    else selectedIds.forEach((id) => onRemovePiece(id));
+    else batch(() => selectedIds.forEach((id) => onRemovePiece(id)));
     setSelectedIds([]);
   }
 
@@ -785,7 +796,7 @@ export function PieceCanvasEditor({
       onMovePieces(selectedIds, dx, dy);
       return;
     }
-    pieces.filter((p) => selectedIds.includes(p.id)).forEach((p) => onMovePiece(p.id, round1(p.x + dx), round1(p.y + dy)));
+    batch(() => pieces.filter((p) => selectedIds.includes(p.id)).forEach((p) => onMovePiece(p.id, round1(p.x + dx), round1(p.y + dy))));
   }
 
   // Tastatur-Bedienung des Plans, nur aktiv wenn das SVG fokussiert ist (Klick oder Tab hinein) —

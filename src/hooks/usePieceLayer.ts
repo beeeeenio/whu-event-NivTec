@@ -4,7 +4,7 @@ import { shiftPieces, type FilledPiece, type Piece2D } from '../domain/customSha
 import { useUndoableState } from './useUndoableState';
 
 export function usePieceLayer() {
-  const { value: pieces, set, undo, redo, canUndo, canRedo } = useUndoableState<Piece2D[]>([]);
+  const { value: pieces, set, transact, undo, redo, canUndo, canRedo } = useUndoableState<Piece2D[]>([]);
 
   const editorProps = useMemo(
     () => ({
@@ -18,13 +18,14 @@ export function usePieceLayer() {
       onMirrorPiece: (id: string) => set((p) => mirrorPieceById(p, id)),
       onShiftAll: (dx: number) => set((p) => shiftPieces(p, dx) ?? p),
       onClear: () => set((p) => (p.length > 0 ? [] : p)),
+      onTransact: transact,
       onUndo: undo,
       onRedo: redo,
       canUndo,
       canRedo,
     }),
-    [pieces, set, undo, redo, canUndo, canRedo],
+    [pieces, set, transact, undo, redo, canUndo, canRedo],
   );
 
-  return { pieces, replace: set, editorProps };
+  return { pieces, replace: set, transact, editorProps };
 }
