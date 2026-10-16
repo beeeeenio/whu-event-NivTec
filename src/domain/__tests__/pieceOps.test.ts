@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { addFilledPieces, movePieceTo, removePieceById, rotatePieceById } from '../pieceOps';
+import { addFilledPieces, movePieceTo, movePiecesBy, removePieceById, removePiecesByIds, rotatePieceById } from '../pieceOps';
 import type { Piece2D } from '../customShape';
 
 describe('pieceOps', () => {
@@ -81,6 +81,57 @@ describe('pieceOps', () => {
       const originalX = piece1.x;
       movePieceTo(pieces, 'p1', 100, 200);
       expect(piece1.x).toBe(originalX);
+    });
+  });
+
+  describe('movePieceTo no-op', () => {
+    it('returns the same array reference when the piece is already at (x, y)', () => {
+      const result = movePieceTo(pieces, 'p1', 0, 0);
+      expect(result).toBe(pieces);
+    });
+  });
+
+  describe('movePiecesBy', () => {
+    it('moves all selected pieces by (dx, dy)', () => {
+      const result = movePiecesBy(pieces, ['p1'], 1, 0.5);
+      expect(result[0].x).toBe(1);
+      expect(result[0].y).toBe(0.5);
+      expect(result[1]).toBe(piece2);
+    });
+
+    it('rounds to 3 decimals', () => {
+      const p: Piece2D = { id: 'r', x: 0.1, y: 0, w: 1, d: 1 };
+      const list = [p];
+      const result = movePiecesBy(list, ['r'], 0.2, 0);
+      expect(result[0].x).toBe(0.3);
+    });
+
+    it('returns the same array reference when dx and dy are both 0', () => {
+      expect(movePiecesBy(pieces, ['p1', 'p2'], 0, 0)).toBe(pieces);
+    });
+
+    it('returns the same array reference when no ID matches', () => {
+      expect(movePiecesBy(pieces, ['nope'], 1, 1)).toBe(pieces);
+    });
+
+    it('keeps corner and shape fields', () => {
+      const q: Piece2D = { id: 'q', x: 0, y: 0, w: 1, d: 1, corner: 'tl', shape: 'viertelkreis' };
+      const result = movePiecesBy([q], ['q'], 2, 3);
+      expect(result[0].corner).toBe('tl');
+      expect(result[0].shape).toBe('viertelkreis');
+      expect(result[0].x).toBe(2);
+      expect(result[0].y).toBe(3);
+    });
+  });
+
+  describe('removePiecesByIds', () => {
+    it('removes all pieces with the given IDs', () => {
+      const result = removePiecesByIds(pieces, ['p1', 'p2']);
+      expect(result).toHaveLength(0);
+    });
+
+    it('returns the same array reference when no ID matches', () => {
+      expect(removePiecesByIds(pieces, ['nope'])).toBe(pieces);
     });
   });
 

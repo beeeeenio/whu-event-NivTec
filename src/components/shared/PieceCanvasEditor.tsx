@@ -18,6 +18,10 @@ interface Props {
   onAddPieces: (pieces: FilledPiece[]) => void;
   onRemovePiece: (id: string) => void;
   onMovePiece: (id: string, x: number, y: number) => void;
+  /** Verschiebt mehrere Stücke gemeinsam um (dx, dy) — ein Undo-Schritt für die ganze Auswahl. */
+  onMovePieces?: (ids: string[], dx: number, dy: number) => void;
+  /** Entfernt mehrere Stücke — ein Undo-Schritt. */
+  onRemovePieces?: (ids: string[]) => void;
   onRotatePiece: (id: string) => void;
   onMirrorPiece?: (id: string) => void;
   /** Verschiebt alle Stücke dieses Plans gemeinsam waagerecht um dx Meter ("Alles verschieben").
@@ -209,6 +213,8 @@ export function PieceCanvasEditor({
   onAddPieces,
   onRemovePiece,
   onMovePiece,
+  onMovePieces,
+  onRemovePieces,
   onRotatePiece,
   onMirrorPiece,
   onShiftAll,
@@ -449,7 +455,8 @@ export function PieceCanvasEditor({
     if (drag?.id === piece.id && drag.group) {
       const { dx, dy } = drag.group;
       if (drag.moved && (dx !== 0 || dy !== 0)) {
-        pieces.filter((p) => selectedIds.includes(p.id)).forEach((p) => onMovePiece(p.id, round1(p.x + dx), round1(p.y + dy)));
+        if (onMovePieces) onMovePieces(selectedIds, dx, dy);
+        else pieces.filter((p) => selectedIds.includes(p.id)).forEach((p) => onMovePiece(p.id, round1(p.x + dx), round1(p.y + dy)));
       }
     } else if (drag?.id === piece.id) {
       if (drag.moved && drag.target) {
@@ -515,7 +522,8 @@ export function PieceCanvasEditor({
 
   function removeSelected() {
     if (selectedIds.length === 0) return;
-    selectedIds.forEach((id) => onRemovePiece(id));
+    if (onRemovePieces) onRemovePieces(selectedIds);
+    else selectedIds.forEach((id) => onRemovePiece(id));
     setSelectedIds([]);
   }
 
