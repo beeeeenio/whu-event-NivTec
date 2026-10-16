@@ -242,6 +242,21 @@ export function findFreePosition(
   return { x: snapToGrid(existing.reduce((m, p) => Math.max(m, p.x + p.w), 0)), y: dy };
 }
 
+/** Alt-Taste: freie Lage ohne Kanten-/Rasterfang und ohne Nachrücken (auf cm gerundet, nie negativ).
+ *  valid=false, wenn das Stück dort ein anderes überlappen würde — der Aufrufer zeigt das rot an und legt nicht ab. */
+export function placeUnsnapped(
+  existing: Piece2D[],
+  w: number,
+  d: number,
+  desiredX: number,
+  desiredY: number,
+  excludeId?: string,
+): { x: number; y: number; valid: boolean } {
+  const x = Math.max(0, Math.round(desiredX * 100) / 100);
+  const y = Math.max(0, Math.round(desiredY * 100) / 100);
+  return { x, y, valid: fitsAt(existing, x, y, w, d, excludeId) };
+}
+
 /**
  * Baut ein LayoutResult direkt aus einer flachen Stückliste auf — keine Reihen, keine
  * Basisfläche. `orientation`/`cols`/`rows` sind für dieses Ergebnis reine Platzhalter (von

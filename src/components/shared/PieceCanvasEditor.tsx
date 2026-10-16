@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import {
   findFreePosition,
   fitsAt,
+  placeUnsnapped,
   shiftPieces,
   type FilledPiece,
   type PlacementOptions,
@@ -346,7 +347,8 @@ interface DragState {
   startClientX: number;
   startClientY: number;
   moved: boolean;
-  target: { x: number; y: number } | null;
+  /** valid=false: Ziel würde ein anderes Stück überlappen (nur mit Alt, ungerastert möglich). */
+  target: { x: number; y: number; valid?: boolean } | null;
   /** Greifpunkt minus Stück-Ursprung (Meter), damit das Stück nicht mit der Mitte an den Cursor springt. */
   grabOffset: { x: number; y: number };
   /** Nur bei gemeinsamem Verschieben mehrerer ausgewählter Stücke: Startpunkt (Meter) und Versatz. */
@@ -386,6 +388,8 @@ export function PieceCanvasEditor({
   const svgRef = useRef<SVGSVGElement>(null);
   const [armed, setArmedState] = useState<ToolPayload | null>(null);
   const [pointerPos, setPointerPos] = useState<{ x: number; y: number } | null>(null);
+  // Alt gedrückt beim Platzieren: freie Lage ohne Einrasten, Überlappung wird rot angezeigt.
+  const [altHeld, setAltHeld] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // Einzelauswahl (Drehen/Spiegeln/Pfeiltasten) gilt nur bei genau einem ausgewählten Stück;
   // mit Umschalt+Klick lassen sich mehrere auswählen, die dann gemeinsam gelöscht werden.
@@ -482,9 +486,13 @@ export function PieceCanvasEditor({
 
   // Bedient sowohl den Klick-Bewaffnen-Hover als auch das Ziehen aus der Palette (sobald der
   // Cursor über dem Canvas ist) — eine einzige Vorschau-Quelle für beide Wege.
-  function previewForPayload(payload: ToolPayload | null): FilledPiece[] | null {
+  function previewForPayload(payload: ToolPayload | null): (FilledPiece & { valid?: boolean })[] | null {
     if (!payload || !pointerPos) return null;
     const { w, d } = payloadSize(payload);
+    if (altHeld) {
+      const free = placeUnsnapped(pieces, w, d, pointerPos.x - w / 2, pointerPos.y - d / 2);
+      return [{ ...payloadToFilled(payload, free.x, free.y), valid: free.valid }];
+    }
     const pos = findFreePosition(pieces, w, d, pointerPos.x - w / 2, pointerPos.y - d / 2, undefined, placementOptions());
     return [payloadToFilled(payload, pos.x, pos.y)];
   }
@@ -517,14 +525,24 @@ export function PieceCanvasEditor({
   // Reine Platzier-Funktion ohne Seiteneffekt auf armed/paletteDrag — das bleibt Sache der
   // Aufrufer (Klick-Platzieren-Pfad, Paletten-Ziehen UND Tastatur-Platzieren nutzen dieselbe
   // Logik, nur die Umrechnung von Bildschirm- zu Meter-Koordinaten unterscheidet sich).
-  function commitPayloadAtPoint(payload: ToolPayload, pos: { x: number; y: number }) {
+  // free=true (Alt): ohne Einrasten an der freien Lage; liegt sie auf einem anderen Stück, wird nichts abgelegt.
+  function commitPayloadAtPoint(payload: ToolPayload, pos: { x: number; y: number }, free = false) {
     const { w, d } = payloadSize(payload);
+    if (free) {
+      const exact = placeUnsnapped(pieces, w, d, pos.x - w / 2, pos.y - d / 2);
+      if (!exact.valid) {
+        showBlockedMessage('Dort ist kein Platz – nichts platziert.');
+        return;
+      }
+      onAddPieces([payloadToFilled(payload, exact.x, exact.y)]);
+      return;
+    }
     const target = findFreePosition(pieces, w, d, pos.x - w / 2, pos.y - d / 2, undefined, placementOptions());
     onAddPieces([payloadToFilled(payload, target.x, target.y)]);
   }
 
-  function commitPayloadAt(payload: ToolPayload, clientX: number, clientY: number) {
-    commitPayloadAtPoint(payload, svgPointFromClient(clientX, clientY));
+  function commitPayloadAt(payload: ToolPayload, clientX: number, clientY: number, free = false) {
+    commitPayloadAtPoint(payload, svgPointFromClient(clientX, clientY), free);
   }
 
   function handlePaletteButtonPointerDown(e: React.PointerEvent<HTMLButtonElement>, payload: ToolPayload) {
@@ -541,6 +559,7 @@ export function PieceCanvasEditor({
 
   function handlePaletteButtonPointerMove(e: React.PointerEvent<HTMLButtonElement>) {
     if (!paletteDrag) return;
+    setAltHeld(e.altKey);
     if (Math.hypot(e.clientX - paletteDrag.startClientX, e.clientY - paletteDrag.startClientY) < dragThresholdPx(paletteDrag.pointerType)) return;
     const rect = svgRef.current?.getBoundingClientRect();
     const overCanvas = !!rect && e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
@@ -553,7 +572,7 @@ export function PieceCanvasEditor({
     setPaletteDrag(null);
     if (!pd?.moved) return; // kein echtes Ziehen: der nachfolgende native `click` armt wie bisher
     suppressNextClickRef.current = true;
-    if (pd.overCanvas) commitPayloadAt(pd.payload, e.clientX, e.clientY);
+    if (pd.overCanvas) commitPayloadAt(pd.payload, e.clientX, e.clientY, e.altKey);
     arm(null);
   }
 
@@ -618,6 +637,30 @@ export function PieceCanvasEditor({
     return () => window.removeEventListener('keydown', onKey);
   }, [pieceDragging]);
 
+  // Alt-Taste beim Platzieren (Klick-Werkzeug oder Paletten-Ziehen): fensterweit beobachtet, damit
+  // Alt auch ankommt, wenn der Cursor gerade nicht über dem Plan ist. Alt allein würde unter Windows
+  // die Menüleiste öffnen — daher preventDefault beim Drücken.
+  const placing = armed !== null || paletteDrag !== null;
+  useEffect(() => {
+    if (!placing) return;
+    const onDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Alt') return;
+      e.preventDefault();
+      setAltHeld(true);
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (e.key !== 'Alt') return;
+      setAltHeld(false);
+    };
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+      setAltHeld(false);
+    };
+  }, [placing]);
+
   // Der Greif-Offset bleibt erhalten: das Stück springt nicht mit der Mitte an den Cursor.
   function handlePiecePointerDown(e: React.PointerEvent<SVGElement>, piece: Piece2D) {
     if (!isPrimaryButton(e)) return;
@@ -655,17 +698,21 @@ export function PieceCanvasEditor({
     if (drag.group) {
       const moving = pieces.filter((p) => selectedIds.includes(p.id));
       const snap = (v: number) => Math.round(v / GRID_STEP_M) * GRID_STEP_M;
+      // Mit Alt ungerastert, nur auf cm gerundet.
+      const quantize = e.altKey ? (v: number) => Math.round(v * 100) / 100 : snap;
       const minX = Math.min(...moving.map((p) => p.x));
       const minY = Math.min(...moving.map((p) => p.y));
-      const dx = Math.max(-minX, snap(x - drag.group.startX));
-      const dy = Math.max(-minY, snap(y - drag.group.startY));
+      const dx = Math.max(-minX, quantize(x - drag.group.startX));
+      const dy = Math.max(-minY, quantize(y - drag.group.startY));
       const valid = checkGroupMove(pieces, selectedIds, dx, dy) === 'ok';
       if (drag.moved && drag.group.dx === dx && drag.group.dy === dy && drag.group.valid === valid) return;
       setDrag((d) => (d && d.group ? { ...d, moved: true, group: { ...d.group, dx, dy, valid } } : d));
       return;
     }
-    const target = findFreePosition(pieces, piece.w, piece.d, x - drag.grabOffset.x, y - drag.grabOffset.y, piece.id, placementOptions());
-    if (drag.moved && drag.target && drag.target.x === target.x && drag.target.y === target.y) return;
+    const target = e.altKey
+      ? placeUnsnapped(pieces, piece.w, piece.d, x - drag.grabOffset.x, y - drag.grabOffset.y, piece.id)
+      : { ...findFreePosition(pieces, piece.w, piece.d, x - drag.grabOffset.x, y - drag.grabOffset.y, piece.id, placementOptions()), valid: true };
+    if (drag.moved && drag.target && drag.target.x === target.x && drag.target.y === target.y && drag.target.valid === target.valid) return;
     setDrag((d) => (d ? { ...d, moved: true, target } : d));
   }
 
@@ -685,7 +732,9 @@ export function PieceCanvasEditor({
         showBlockedMessage('Dort ist kein Platz – die Auswahl würde andere Stücke überlappen. Nichts verschoben.');
       }
     } else if (drag?.id === piece.id) {
-      if (drag.moved && drag.target) {
+      if (drag.moved && drag.target?.valid === false) {
+        showBlockedMessage('Dort ist kein Platz – das Stück würde ein anderes überlappen. Nichts verschoben.');
+      } else if (drag.moved && drag.target) {
         onMovePiece(piece.id, drag.target.x, drag.target.y);
         setSelectedId(piece.id);
       } else {
@@ -850,7 +899,7 @@ export function PieceCanvasEditor({
     }
     if ((e.key === 'Enter' || e.key === ' ') && armed && pointerPos) {
       e.preventDefault();
-      commitPayloadAtPoint(armed, pointerPos);
+      commitPayloadAtPoint(armed, pointerPos, false);
       arm(null);
       return;
     }
@@ -1040,11 +1089,12 @@ export function PieceCanvasEditor({
           pointerEvents={armed ? 'all' : 'none'}
           onPointerMove={(e) => {
             if (!armed) return;
+            setAltHeld(e.altKey);
             setPointerPos(svgPointFromClient(e.clientX, e.clientY));
           }}
           onClick={(e) => {
             if (!armed) return;
-            commitPayloadAt(armed, e.clientX, e.clientY);
+            commitPayloadAt(armed, e.clientX, e.clientY, e.altKey);
             arm(null);
           }}
           style={{ cursor: armed ? 'copy' : 'default' }}
@@ -1147,10 +1197,11 @@ export function PieceCanvasEditor({
               <>
                 <PieceShape
                   piece={{ x: drag.target.x, y: drag.target.y, w, d, corner: dragged?.corner, shape: dragged?.shape }}
-                  fill="var(--color-accent)"
-                  fillOpacity={0.35}
-                  stroke="var(--color-accent)"
+                  fill={drag.target.valid === false ? 'var(--color-danger)' : 'var(--color-accent)'}
+                  fillOpacity={drag.target.valid === false ? 0.2 : 0.35}
+                  stroke={drag.target.valid === false ? 'var(--color-danger)' : 'var(--color-accent)'}
                   strokeWidth={0.03}
+                  strokeDasharray={drag.target.valid === false ? '0.08 0.06' : undefined}
                   style={{ pointerEvents: 'none' }}
                 />
                 <DimensionLabel x={drag.target.x} y={drag.target.y} w={w} d={d} />
@@ -1162,10 +1213,11 @@ export function PieceCanvasEditor({
           <PieceShape
             key={idx}
             piece={p}
-            fill="var(--color-accent)"
-            fillOpacity={0.35}
-            stroke="var(--color-accent)"
+            fill={p.valid === false ? 'var(--color-danger)' : 'var(--color-accent)'}
+            fillOpacity={p.valid === false ? 0.2 : 0.35}
+            stroke={p.valid === false ? 'var(--color-danger)' : 'var(--color-accent)'}
             strokeWidth={0.03}
+            strokeDasharray={p.valid === false ? '0.08 0.06' : undefined}
             style={{ pointerEvents: 'none' }}
           />
         ))}
@@ -1180,7 +1232,7 @@ export function PieceCanvasEditor({
 
       <div className="space-y-2" style={{ fontFamily: 'var(--font-display)' }}>
         <p className="text-xs text-[var(--color-text-muted)]">
-          Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil. Beim Ziehen zeigen Hilfslinien Fluchten, Abstände und das Gesamtmaß in m.
+          Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil. Beim Ziehen zeigen Hilfslinien Fluchten, Abstände und das Gesamtmaß in m. Alt gedrückt halten: frei platzieren, ohne Einrasten.
         </p>
         <div className="flex flex-wrap items-start gap-x-10 gap-y-4">
         {[GALLERY_GROUPS.slice(0, 1), GALLERY_GROUPS.slice(1)].map((column, colIdx) => (
@@ -1263,6 +1315,9 @@ export function PieceCanvasEditor({
           </li>
           <li>
             <kbd className="rounded border border-[var(--color-border)] px-1">Enter</kbd> platzieren
+          </li>
+          <li>
+            <kbd className="rounded border border-[var(--color-border)] px-1">Alt</kbd> beim Ziehen – ohne Einrasten (Kollision wird rot)
           </li>
           <li>
             <kbd className="rounded border border-[var(--color-border)] px-1">R</kbd> drehen — auch schon während du
