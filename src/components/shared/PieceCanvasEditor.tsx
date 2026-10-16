@@ -640,7 +640,8 @@ export function PieceCanvasEditor({
   // Alt-Taste beim Platzieren (Klick-Werkzeug oder Paletten-Ziehen): fensterweit beobachtet, damit
   // Alt auch ankommt, wenn der Cursor gerade nicht über dem Plan ist. Alt allein würde unter Windows
   // die Menüleiste öffnen — daher preventDefault beim Drücken.
-  const placing = armed !== null || paletteDrag !== null;
+  // Auch beim Ziehen eines Stücks, damit Alt dort nicht die Menüleiste öffnet.
+  const placing = armed !== null || paletteDrag !== null || pieceDragging;
   useEffect(() => {
     if (!placing) return;
     const onDown = (e: KeyboardEvent) => {
@@ -899,7 +900,8 @@ export function PieceCanvasEditor({
     }
     if ((e.key === 'Enter' || e.key === ' ') && armed && pointerPos) {
       e.preventDefault();
-      commitPayloadAtPoint(armed, pointerPos, false);
+      // Alt+Enter legt wie die Vorschau frei ab.
+      commitPayloadAtPoint(armed, pointerPos, e.altKey);
       arm(null);
       return;
     }
