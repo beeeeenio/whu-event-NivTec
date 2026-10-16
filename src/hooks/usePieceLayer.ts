@@ -15,6 +15,7 @@ export function usePieceLayer() {
       onMovePieces: (ids: string[], dx: number, dy: number) => set((p) => movePiecesBy(p, ids, dx, dy)),
       onRemovePieces: (ids: string[]) => set((p) => removePiecesByIds(p, ids)),
       onRotatePiece: (id: string) => set((p) => rotatePieceById(p, id)),
+      onReplaceAll: (next: Piece2D[]) => set((p) => (next === p ? p : next)),
       onMirrorPiece: (id: string) => set((p) => mirrorPieceById(p, id)),
       onShiftAll: (dx: number) => set((p) => shiftPieces(p, dx) ?? p),
       onClear: () => set((p) => (p.length > 0 ? [] : p)),

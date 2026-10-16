@@ -1,4 +1,4 @@
-import { fitsAllAt, fitsAt, makePieceId, mirrorPieceInPlace, rotatePieceInPlace, type FilledPiece, type Piece2D } from './customShape';
+import { findFreePosition, fitsAllAt, fitsAt, makePieceId, mirrorPieceInPlace, rotatePieceInPlace, type FilledPiece, type PlacementOptions, type Piece2D } from './customShape';
 
 /**
  * Appends filled pieces (without IDs) to the pieces array, assigning fresh IDs.
@@ -124,4 +124,84 @@ export function mirrorPieceById(pieces: Piece2D[], id: string): Piece2D[] {
     return pieces;
   }
   return pieces.map((p) => (p.id === id ? mirrorPieceInPlace(p) : p));
+}
+
+/**
+ * Rastet den Versatz einer Gruppe an Kanten der übrigen Stücke (Bounding-Box der Gruppe, Anfang/Ende), sonst aufs Raster; nie links/oben über 0.
+ */
+export function snapGroupDelta(pieces: Piece2D[], ids: readonly string[], rawDx: number, rawDy: number, toleranceM: number, gridM = 0.5): { dx: number; dy: number } {
+  const set = new Set(ids);
+  const moving = pieces.filter((p) => set.has(p.id));
+  if (moving.length === 0) return { dx: 0, dy: 0 };
+  const others = pieces.filter((p) => !set.has(p.id));
+  const minX = Math.min(...moving.map((p) => p.x));
+  const maxX = Math.max(...moving.map((p) => p.x + p.w));
+  const minY = Math.min(...moving.map((p) => p.y));
+  const maxY = Math.max(...moving.map((p) => p.y + p.d));
+  const xEdges = others.flatMap((p) => [p.x, p.x + p.w]);
+  const yEdges = others.flatMap((p) => [p.y, p.y + p.d]);
+  const dx = Math.max(-minX, snapDelta(rawDx, [minX, maxX], xEdges, toleranceM, gridM));
+  const dy = Math.max(-minY, snapDelta(rawDy, [minY, maxY], yEdges, toleranceM, gridM));
+  return { dx: r3(dx), dy: r3(dy) };
+}
+
+/** Versatz, bei dem eine Gruppenkante (groupEdges) an einer Nachbarkante (edges) liegt — nur innerhalb der Toleranz; sonst aufs Raster. */
+function snapDelta(raw: number, groupEdges: number[], edges: number[], toleranceM: number, gridM: number): number {
+  let best: number | null = null;
+  for (const e of edges) {
+    for (const g of groupEdges) {
+      const cand = e - g;
+      if (best === null || Math.abs(cand - raw) < Math.abs(best - raw)) best = cand;
+    }
+  }
+  if (best !== null && Math.abs(best - raw) < toleranceM) return best;
+  return Math.round(raw / gridM) * gridM;
+}
+
+/**
+ * Dreht ein Stück um seinen Mittelpunkt; passt es dort nicht, rückt es wie beim Ziehen an die nächste freie Stelle. Quadratische Ecken-Stücke drehen an Ort und Stelle.
+ * `blockers` sind zusätzliche feste Stücke (z. B. andere Ebene), denen ausgewichen wird; sie landen nie im Ergebnis.
+ */
+export function rotatePieceAroundCenter(pieces: Piece2D[], id: string, options?: PlacementOptions, blockers: readonly Piece2D[] = []): Piece2D[] {
+  const p = pieces.find((q) => q.id === id);
+  if (!p) return pieces;
+  if (p.corner !== undefined && Math.abs(p.w - p.d) < 1e-6) return rotatePieceById(pieces, id);
+  const r = rotatePieceInPlace(p);
+  const cx = p.x + p.w / 2;
+  const cy = p.y + p.d / 2;
+  const pos = findFreePosition([...pieces, ...blockers], r.w, r.d, cx - r.w / 2, cy - r.d / 2, id, options);
+  return pieces.map((q) => (q.id === id ? { ...r, x: pos.x, y: pos.y } : q));
+}
+
+/**
+ * Dreht die Auswahl als Block 90° im Uhrzeigersinn um den Mittelpunkt ihrer Bounding-Box; null bei Kollision mit anderen Stücken.
+ * Die Auswahl rastet danach auf dem Raster (Anfang der Bounding-Box), liegt nie links/oben über 0.
+ */
+export function rotateGroupAroundCenter(pieces: Piece2D[], ids: readonly string[], gridM = 0.5, blockers: readonly Piece2D[] = []): Piece2D[] | null {
+  const set = new Set(ids);
+  const moving = pieces.filter((p) => set.has(p.id));
+  if (moving.length === 0) return pieces;
+  const minX = Math.min(...moving.map((p) => p.x));
+  const maxX = Math.max(...moving.map((p) => p.x + p.w));
+  const minY = Math.min(...moving.map((p) => p.y));
+  const maxY = Math.max(...moving.map((p) => p.y + p.d));
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  // Uhrzeigersinn bei y nach unten: (dx, dy) -> (-dy, dx) um die Mitte.
+  const turned = moving.map((p) => {
+    const r = rotatePieceInPlace(p);
+    return { ...r, x: cx - (p.y + p.d - cy), y: cy + (p.x - cx) };
+  });
+  const nMinX = Math.min(...turned.map((q) => q.x));
+  const nMinY = Math.min(...turned.map((q) => q.y));
+  let sx = Math.round(nMinX / gridM) * gridM - nMinX;
+  if (nMinX + sx < 0) sx -= nMinX + sx;
+  let sy = Math.round(nMinY / gridM) * gridM - nMinY;
+  if (nMinY + sy < 0) sy -= nMinY + sy;
+  const placed = new Map(turned.map((q) => [q.id, { ...q, x: r3(q.x + sx), y: r3(q.y + sy) }] as const));
+  const fixed = [...pieces.filter((p) => !set.has(p.id)), ...blockers];
+  for (const q of placed.values()) {
+    if (!fitsAt(fixed, q.x, q.y, q.w, q.d)) return null;
+  }
+  return pieces.map((p) => placed.get(p.id) ?? p);
 }

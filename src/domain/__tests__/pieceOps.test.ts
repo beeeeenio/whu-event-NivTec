@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { addFilledPieces, checkGroupMove, duplicateWithOffset, movePieceTo, movePiecesBy, removePieceById, removePiecesByIds, rotatePieceById } from '../pieceOps';
-import type { Piece2D } from '../customShape';
+import { addFilledPieces, checkGroupMove, duplicateWithOffset, movePieceTo, movePiecesBy, removePieceById, removePiecesByIds, rotateGroupAroundCenter, rotatePieceAroundCenter, rotatePieceById, snapGroupDelta } from '../pieceOps';
+import { fitsAt, type Piece2D } from '../customShape';
 
 describe('pieceOps', () => {
   let piece1: Piece2D;
@@ -280,6 +280,117 @@ describe('pieceOps', () => {
         { id: 'b', x: 2, y: 0, w: 2, d: 1 },
       ];
       expect(duplicateWithOffset(pieces, ['a'], 1)).toBeNull();
+    });
+  });
+});
+
+describe('Kanten-Snapping und Drehen um den Mittelpunkt', () => {
+  describe('snapGroupDelta', () => {
+    it('rastet an der Nachbarkante, wenn sie innerhalb der Toleranz liegt', () => {
+      // Nachbar bei x=3,3 → Gruppe (x=0..1) soll bei 2,3 bündig anliegen (Anfang an Ende)
+      const pieces: Piece2D[] = [
+        { id: 'm', x: 0, y: 0, w: 1, d: 1 },
+        { id: 'n', x: 3.3, y: 0, w: 1, d: 1 },
+      ];
+      expect(snapGroupDelta(pieces, ['m'], 2.35, 0, 0.1)).toEqual({ dx: 2.3, dy: 0 });
+    });
+
+    it('rastet außerhalb der Toleranz aufs 0,5-m-Raster', () => {
+      const pieces: Piece2D[] = [
+        { id: 'm', x: 0, y: 0, w: 1, d: 1 },
+        { id: 'n', x: 3.3, y: 0, w: 1, d: 1 },
+      ];
+      expect(snapGroupDelta(pieces, ['m'], 2.1, 0, 0.1)).toEqual({ dx: 2, dy: 0 });
+    });
+
+    it('klemmt so, dass die Auswahl nicht links von x=0 wandert', () => {
+      const pieces: Piece2D[] = [
+        { id: 'm', x: 1, y: 0, w: 1, d: 1 },
+        { id: 'n', x: 3.3, y: 0, w: 1, d: 1 },
+      ];
+      expect(snapGroupDelta(pieces, ['m'], -1.5, 0, 0.1).dx).toBe(-1);
+    });
+
+    it('rastet auch in y an Nachbarkanten', () => {
+      const pieces: Piece2D[] = [
+        { id: 'm', x: 0, y: 0, w: 1, d: 1 },
+        { id: 'n', x: 5, y: 2.7, w: 1, d: 1 },
+      ];
+      expect(snapGroupDelta(pieces, ['m'], 0, 1.75, 0.1).dy).toBe(1.7);
+    });
+
+    it('liefert {0,0} bei leerer Auswahl', () => {
+      expect(snapGroupDelta([], [], 3, 3, 0.1)).toEqual({ dx: 0, dy: 0 });
+    });
+  });
+
+  describe('rotatePieceAroundCenter', () => {
+    it('dreht ein 2×1 bei (0,2) um seine Mitte zu 1×2 bei (0,5;1,5)', () => {
+      const pieces: Piece2D[] = [{ id: 'a', x: 0, y: 2, w: 2, d: 1 }];
+      const [r] = rotatePieceAroundCenter(pieces, 'a');
+      expect(r.w).toBe(1);
+      expect(r.d).toBe(2);
+      expect(r.x).toBe(0.5);
+      expect(r.y).toBe(1.5);
+    });
+
+    it('rückt nach, wenn das gedrehte Stück an der Mitte kollidiert', () => {
+      const pieces: Piece2D[] = [
+        { id: 'a', x: 0, y: 2, w: 2, d: 1 },
+        { id: 'b', x: 0.5, y: 1, w: 1, d: 2 },
+      ];
+      const result = rotatePieceAroundCenter(pieces, 'a');
+      const a = result.find((p) => p.id === 'a')!;
+      expect(a.w).toBe(1);
+      expect(a.d).toBe(2);
+      expect(fitsAt([pieces[1]], a.x, a.y, a.w, a.d)).toBe(true);
+    });
+
+    it('dreht ein quadratisches Dreieck an Ort und Stelle (nur die Ecke wechselt)', () => {
+      const pieces: Piece2D[] = [{ id: 't', x: 1, y: 1, w: 1, d: 1, corner: 'tl' }];
+      const [r] = rotatePieceAroundCenter(pieces, 't');
+      expect(r.corner).not.toBe('tl');
+      expect([r.x, r.y, r.w, r.d]).toEqual([1, 1, 1, 1]);
+    });
+
+    it('weicht Blockern aus und nimmt sie nicht ins Ergebnis auf', () => {
+      const pieces: Piece2D[] = [{ id: 'a', x: 0, y: 2, w: 2, d: 1 }];
+      const blockers: Piece2D[] = [{ id: 'blk', x: 0.5, y: 1.5, w: 1, d: 2 }];
+      const result = rotatePieceAroundCenter(pieces, 'a', undefined, blockers);
+      expect(result).toHaveLength(1);
+      expect(result.some((p) => p.id === 'blk')).toBe(false);
+      const a = result[0];
+      expect(a.w).toBe(1);
+      expect(a.d).toBe(2);
+      expect(fitsAt(blockers, a.x, a.y, a.w, a.d)).toBe(true);
+    });
+
+    it('gibt die Liste unverändert zurück, wenn die ID fehlt', () => {
+      const pieces: Piece2D[] = [{ id: 'a', x: 0, y: 2, w: 2, d: 1 }];
+      expect(rotatePieceAroundCenter(pieces, 'nope')).toBe(pieces);
+    });
+  });
+
+  describe('rotateGroupAroundCenter', () => {
+    it('dreht zwei 2×1 als Block um die Mitte zu zwei 1×2 bei x=1,5 mit y=0 und y=2', () => {
+      const pieces: Piece2D[] = [
+        { id: 'a', x: 0, y: 0, w: 2, d: 1 },
+        { id: 'b', x: 2, y: 0, w: 2, d: 1 },
+      ];
+      const result = rotateGroupAroundCenter(pieces, ['a', 'b']);
+      expect(result).not.toBeNull();
+      const [a, b] = result!;
+      expect([a.id, a.w, a.d, a.x, a.y]).toEqual(['a', 1, 2, 1.5, 0]);
+      expect([b.id, b.w, b.d, b.x, b.y]).toEqual(['b', 1, 2, 1.5, 2]);
+    });
+
+    it('gibt null zurück, wenn der gedrehte Block ein drittes Stück trifft', () => {
+      const pieces: Piece2D[] = [
+        { id: 'a', x: 0, y: 0, w: 2, d: 1 },
+        { id: 'b', x: 2, y: 0, w: 2, d: 1 },
+        { id: 'c', x: 1, y: 2.5, w: 1, d: 1 },
+      ];
+      expect(rotateGroupAroundCenter(pieces, ['a', 'b'])).toBeNull();
     });
   });
 });

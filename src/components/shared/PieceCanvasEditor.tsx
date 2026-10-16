@@ -8,7 +8,7 @@ import {
   type PlacementOptions,
   type Piece2D,
 } from '../../domain/customShape';
-import { checkGroupMove, duplicateWithOffset } from '../../domain/pieceOps';
+import { checkGroupMove, duplicateWithOffset, rotateGroupAroundCenter, rotatePieceAroundCenter, snapGroupDelta } from '../../domain/pieceOps';
 import { alignmentGuides, nearestGaps, unionBounds, type AlignmentGuide, type GapMeasure, type Rect } from '../../domain/smartGuides';
 import { isSondermassPiece, TRIANGLE_PANEL_SIZE_M, QUARTER_CIRCLE_RADIUS_M, RECT_CATALOG } from '../../domain/panels';
 import { quarterCirclePath, triangleHand, trianglePoints } from '../../domain/triangle';
@@ -28,6 +28,8 @@ interface Props {
   /** Entfernt mehrere Stücke — ein Undo-Schritt. */
   onRemovePieces?: (ids: string[]) => void;
   onRotatePiece: (id: string) => void;
+  /** Ersetzt die ganze Stückliste in einem Undo-Schritt (Drehen um den Mittelpunkt, Vorlagen, Inspector). */
+  onReplaceAll?: (next: Piece2D[]) => void;
   onMirrorPiece?: (id: string) => void;
   /** Verschiebt alle Stücke dieses Plans gemeinsam waagerecht um dx Meter ("Alles verschieben").
    *  Wird nur aufgerufen, wenn dabei nichts links über x=0 hinausrutscht (siehe shiftPieces). */
@@ -372,6 +374,7 @@ export function PieceCanvasEditor({
   onMovePieces,
   onRemovePieces,
   onRotatePiece,
+  onReplaceAll,
   onMirrorPiece,
   onShiftAll,
   onUndo,
@@ -697,14 +700,19 @@ export function PieceCanvasEditor({
     if (movedPx < dragThresholdPx(drag.pointerType)) return;
     const { x, y } = svgPointFromClient(e.clientX, e.clientY);
     if (drag.group) {
-      const moving = pieces.filter((p) => selectedIds.includes(p.id));
-      const snap = (v: number) => Math.round(v / GRID_STEP_M) * GRID_STEP_M;
-      // Mit Alt ungerastert, nur auf cm gerundet.
-      const quantize = e.altKey ? (v: number) => Math.round(v * 100) / 100 : snap;
-      const minX = Math.min(...moving.map((p) => p.x));
-      const minY = Math.min(...moving.map((p) => p.y));
-      const dx = Math.max(-minX, quantize(x - drag.group.startX));
-      const dy = Math.max(-minY, quantize(y - drag.group.startY));
+      let dx: number;
+      let dy: number;
+      if (e.altKey) {
+        // Mit Alt ungerastert, nur auf cm gerundet – und nie links/oben über den Plan hinaus.
+        const moving = pieces.filter((p) => selectedIds.includes(p.id));
+        const minX = Math.min(...moving.map((p) => p.x));
+        const minY = Math.min(...moving.map((p) => p.y));
+        dx = Math.max(-minX, Math.round((x - drag.group.startX) * 100) / 100);
+        dy = Math.max(-minY, Math.round((y - drag.group.startY) * 100) / 100);
+      } else {
+        // Einrasten an Kanten der übrigen Stücke, sonst aufs Raster.
+        ({ dx, dy } = snapGroupDelta(pieces, selectedIds, x - drag.group.startX, y - drag.group.startY, SNAP_TOLERANCE_PX * metersPerPx));
+      }
       const valid = checkGroupMove(pieces, selectedIds, dx, dy) === 'ok';
       if (drag.moved && drag.group.dx === dx && drag.group.dy === dy && drag.group.valid === valid) return;
       setDrag((d) => (d && d.group ? { ...d, moved: true, group: { ...d.group, dx, dy, valid } } : d));
@@ -755,7 +763,19 @@ export function PieceCanvasEditor({
   const selectedPiece = selectedId ? pieces.find((p) => p.id === selectedId) ?? null : null;
 
   function rotateSelected() {
+    // Mehrfachauswahl: als Block um die Mitte drehen (nur mit onReplaceAll).
+    if (selectedIds.length > 1 && onReplaceAll) {
+      const next = rotateGroupAroundCenter(pieces, selectedIds);
+      if (next === null) showBlockedMessage('Drehen nicht möglich – die gedrehte Auswahl würde andere Stücke überlappen.');
+      else onReplaceAll(next);
+      return;
+    }
     if (!selectedPiece) return;
+    // Mit onReplaceAll um den Mittelpunkt drehen, passend zu Ziehen (Kanten-Fang, Nachrücken).
+    if (onReplaceAll) {
+      onReplaceAll(rotatePieceAroundCenter(pieces, selectedPiece.id, placementOptions()));
+      return;
+    }
     // Ein quadratisches Dreieck (1×1) oder Viertelkreis behält beim Drehen exakt seine Bounding-Box
     // (nur die Ecke wechselt) — kann also nie neu kollidieren.
     // Ein nicht-quadratisches Dreieck (2×1) ändert seine Box beim Drehen und muss wie ein Rechteck
@@ -963,7 +983,7 @@ export function PieceCanvasEditor({
         <button
           type="button"
           onClick={rotateCurrent}
-          disabled={!armed && !selectedPiece}
+          disabled={!armed && !selectedPiece && !(selectedIds.length > 1 && onReplaceAll)}
           title="Drehen (R) — wirkt auf das gewählte oder gerade aufgenommene Stück"
           className={ACTION_BTN}
         >
