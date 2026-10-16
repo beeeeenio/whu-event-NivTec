@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   findFreePosition,
   fitsAt,
@@ -10,13 +10,15 @@ import {
 } from '../../domain/customShape';
 import { checkGroupMove, duplicateWithOffset, rotateGroupAroundCenter, rotatePieceAroundCenter, snapGroupDelta } from '../../domain/pieceOps';
 import { alignmentGuides, nearestGaps, unionBounds, type AlignmentGuide, type GapMeasure, type Rect } from '../../domain/smartGuides';
-import { isSondermassPiece, TRIANGLE_PANEL_SIZE_M, QUARTER_CIRCLE_RADIUS_M, RECT_CATALOG } from '../../domain/panels';
-import { quarterCirclePath, triangleHand, trianglePoints } from '../../domain/triangle';
+import { isSondermassPiece, TRIANGLE_PANEL_SIZE_M } from '../../domain/panels';
+import { triangleHand } from '../../domain/triangle';
 import { mirrorPayload, payloadMatches, payloadSize, payloadToFilled, rotatePayload, type ToolPayload } from '../../domain/toolPayload';
-import type { TriangleCorner } from '../../domain/types';
 import { formatMeters } from '../../lib/format';
 import { dragThresholdPx, isPrimaryButton, shouldRotateOnWheel } from '../../lib/pointer';
 import { isEditableTarget, undoRedoAction } from '../../lib/shortcuts';
+import { PiecePalette } from './editor/PiecePalette';
+import { DimensionLabel, PieceShape } from './editor/PieceShape';
+import { ShortcutHelp } from './editor/ShortcutHelp';
 
 interface Props {
   pieces: Piece2D[];
@@ -84,128 +86,6 @@ const ACTION_BTN =
   'px-2.5 py-1 rounded-md text-sm border border-[var(--color-panel-stroke)] bg-[var(--color-surface)] text-[var(--color-text)] cursor-pointer select-none enabled:hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed';
 
 const QUICK_WIDTHS = [2, 1.5, 1, 0.5] as const;
-
-const fmtDim = (v: number) => String(Math.round(v * 100) / 100).replace('.', ',');
-
-interface GalleryTile {
-  key: string;
-  label: string;
-  payload: ToolPayload;
-  geometry: ShapeGeometry;
-}
-
-const GALLERY_GROUPS: { title: string; tiles: GalleryTile[] }[] = [
-  {
-    title: 'Rechtecke',
-    tiles: [...RECT_CATALOG]
-      .sort((a, b) => b.w - a.w || b.d - a.d)
-      .map((r) => ({
-        key: `rect-${r.w}x${r.d}`,
-        label: `${fmtDim(r.w)}×${fmtDim(r.d)}`,
-        payload: { kind: 'piece', w: r.w, d: r.d } as ToolPayload,
-        geometry: { x: 0, y: 0, w: r.w, d: r.d },
-      })),
-  },
-  {
-    title: 'Dreiecke',
-    tiles: [
-      { key: 'tri-1x1', label: '1×1', payload: { kind: 'triangle', corner: 'tl', w: 1, d: 1 }, geometry: { x: 0, y: 0, w: 1, d: 1, corner: 'tl' } },
-      { key: 'tri-2x1', label: '2×1', payload: { kind: 'triangle', corner: 'tl', w: 2, d: 1 }, geometry: { x: 0, y: 0, w: 2, d: 1, corner: 'tl' } },
-    ],
-  },
-  {
-    title: 'Rund',
-    tiles: [
-      {
-        key: 'quarter',
-        label: 'R 1',
-        payload: { kind: 'viertelkreis', corner: 'tl' },
-        geometry: { x: 0, y: 0, w: QUARTER_CIRCLE_RADIUS_M, d: QUARTER_CIRCLE_RADIUS_M, corner: 'tl', shape: 'viertelkreis' },
-      },
-    ],
-  },
-];
-
-interface ShapeGeometry {
-  x: number;
-  y: number;
-  w: number;
-  d: number;
-  corner?: TriangleCorner;
-  shape?: string;
-}
-
-/** Rendert ein Stück (egal ob platziert, Geist beim Ziehen oder Vorschau) als `<rect>` oder,
- *  bei einem Dreieckpodest, als `<polygon>` mit den 3 echten Eckpunkten — eine Stelle statt
- *  vierfach dupliziert (platzierte Stücke, Verschiebe-Ziel-Geist, Platzier-/Zieh-Vorschau). */
-function PieceShape({
-  piece,
-  fill,
-  fillOpacity,
-  stroke,
-  strokeWidth,
-  strokeDasharray,
-  pointerEvents,
-  style,
-  onPointerDown,
-  onPointerMove,
-  onPointerUp,
-  onPointerCancel,
-  onLostPointerCapture,
-  children,
-}: {
-  piece: ShapeGeometry;
-  fill: string;
-  fillOpacity?: number;
-  stroke: string;
-  strokeWidth: number;
-  strokeDasharray?: string;
-  pointerEvents?: 'all' | 'none';
-  style?: React.CSSProperties;
-  onPointerDown?: (e: React.PointerEvent<SVGElement>) => void;
-  onPointerMove?: (e: React.PointerEvent<SVGElement>) => void;
-  onPointerUp?: (e: React.PointerEvent<SVGElement>) => void;
-  onPointerCancel?: (e: React.PointerEvent<SVGElement>) => void;
-  onLostPointerCapture?: (e: React.PointerEvent<SVGElement>) => void;
-  children?: React.ReactNode;
-}) {
-  const shared = {
-    fill,
-    fillOpacity,
-    stroke,
-    strokeWidth,
-    strokeDasharray,
-    pointerEvents,
-    style,
-    onPointerDown,
-    onPointerMove,
-    onPointerUp,
-    onPointerCancel,
-    onLostPointerCapture,
-  };
-  if (piece.corner === undefined) {
-    return (
-      <rect x={piece.x} y={piece.y} width={piece.w} height={piece.d} {...shared}>
-        {children}
-      </rect>
-    );
-  }
-  if (piece.shape === 'viertelkreis') {
-    return (
-      <path d={quarterCirclePath(piece, piece.corner)} {...shared}>
-        {children}
-      </path>
-    );
-  }
-  const points = trianglePoints(piece, piece.corner)
-    .map((pt) => `${pt.x},${pt.y}`)
-    .join(' ');
-  return (
-    <polygon points={points} {...shared}>
-      {children}
-    </polygon>
-  );
-}
 
 /** Smart Guides beim Ziehen: Fluchtlinien, Abstandsmaße zu Nachbarn/Rand und das Gesamtmaß.
  *  Alles in Metern; Strichstärken und Schrift werden über px umgerechnet, damit sie bei jeder
@@ -325,24 +205,6 @@ function SmartGuidesLayer({
   );
 }
 
-/** Maß-Beschriftung wie auf einem echten Aufmaßblatt — folgt einem einzelnen Stück
- *  beim Ziehen/Platzieren-Vorschau. */
-function DimensionLabel({ x, y, w, d }: { x: number; y: number; w: number; d: number }) {
-  return (
-    <text
-      x={x + w / 2}
-      y={y - 0.12}
-      fontSize={0.16}
-      textAnchor="middle"
-      fill="var(--color-accent)"
-      fontFamily="var(--font-mono)"
-      style={{ pointerEvents: 'none' }}
-    >
-      {formatMeters(w, 2)}×{formatMeters(d, 2)} m
-    </text>
-  );
-}
-
 interface DragState {
   id: string;
   pointerType: string;
@@ -409,6 +271,30 @@ export function PieceCanvasEditor({
   // auch bei Pointer-Capture). Ein Ref statt State, damit der Wert synchron und ohne
   // Render-Verzögerung im direkt danach feuernden `onClick` verfügbar ist.
   const suppressNextClickRef = useRef(false);
+  // Stabile Callbacks für die memo-Palette: der Ref zeigt bei jedem Render auf die aktuellen Handler
+  // (Zuweisung unten vor dem return), die Callbacks selbst bleiben über alle Renders gleich.
+  const paletteHandlersRef = useRef({
+    down: handlePaletteButtonPointerDown,
+    move: handlePaletteButtonPointerMove,
+    up: handlePaletteButtonPointerUp,
+    arm,
+  });
+  const paletteCallbacks = useMemo(
+    () => ({
+      onTilePointerDown: (e: React.PointerEvent<HTMLButtonElement>, p: ToolPayload) => paletteHandlersRef.current.down(e, p),
+      onTilePointerMove: (e: React.PointerEvent<HTMLButtonElement>) => paletteHandlersRef.current.move(e),
+      onTilePointerUp: (e: React.PointerEvent<HTMLButtonElement>) => paletteHandlersRef.current.up(e),
+      onTileCancel: () => setPaletteDrag(null),
+      onTileClick: (p: ToolPayload, isArmed: boolean) => {
+        if (suppressNextClickRef.current) {
+          suppressNextClickRef.current = false;
+          return;
+        }
+        paletteHandlersRef.current.arm(isArmed ? null : p);
+      },
+    }),
+    [],
+  );
   // Zeitpunkt (ms) der letzten Drehung per Mausrad, für die Drosselung während eines Paletten-Ziehens.
   const lastWheelRotateRef = useRef<number | null>(null);
 
@@ -950,6 +836,11 @@ export function PieceCanvasEditor({
     else onRedo?.();
   }
 
+  // Nach jedem Commit die aktuellen Handler für die Palette aktualisieren (siehe paletteCallbacks);
+  // vor jedem Ereignis ist der Ref damit aktuell, ohne während des Renders auf den Ref zuzugreifen.
+  useLayoutEffect(() => {
+    paletteHandlersRef.current = { down: handlePaletteButtonPointerDown, move: handlePaletteButtonPointerMove, up: handlePaletteButtonPointerUp, arm };
+  });
   return (
     <div className="space-y-3" onKeyDown={handleEditorKeyDown}>
       <div
@@ -1252,127 +1143,9 @@ export function PieceCanvasEditor({
         )}
       </svg>
 
-      <div className="space-y-2" style={{ fontFamily: 'var(--font-display)' }}>
-        <p className="text-xs text-[var(--color-text-muted)]">
-          Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil. Beim Ziehen zeigen Hilfslinien Fluchten, Abstände und das Gesamtmaß in m. Alt gedrückt halten: frei platzieren, ohne Einrasten.
-        </p>
-        <div className="flex flex-wrap items-start gap-x-10 gap-y-4">
-        {[GALLERY_GROUPS.slice(0, 1), GALLERY_GROUPS.slice(1)].map((column, colIdx) => (
-        <div key={colIdx} className={`flex gap-x-6 gap-y-3 ${colIdx === 0 ? 'max-w-[34rem] flex-wrap' : 'flex-wrap'}`}>
-        {column.map((group) => (
-          <div key={group.title} className="flex flex-wrap items-end gap-x-3 gap-y-1.5">
-            <span className="w-full text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-              {group.title}
-            </span>
-            {group.tiles.map((tile) => {
-              const isArmed = payloadMatches(armed, tile.payload);
-              const g = tile.geometry;
-              const scale = 24;
-              return (
-                <button
-                  key={tile.key}
-                  type="button"
-                  onPointerDown={(e) => handlePaletteButtonPointerDown(e, tile.payload)}
-                  onPointerMove={handlePaletteButtonPointerMove}
-                  onPointerUp={handlePaletteButtonPointerUp}
-                  onPointerCancel={() => setPaletteDrag(null)}
-                  onLostPointerCapture={() => setPaletteDrag(null)}
-                  onClick={() => {
-                    if (suppressNextClickRef.current) {
-                      suppressNextClickRef.current = false;
-                      return;
-                    }
-                    arm(isArmed ? null : tile.payload);
-                  }}
-                  aria-pressed={isArmed}
-                  aria-label={`${group.title === 'Rechtecke' ? 'Stück' : group.title === 'Dreiecke' ? 'Dreieckpodest' : 'Viertelkreis'} ${tile.label} m ${isArmed ? 'ausgewählt' : 'auswählen'}, oder direkt auf den Plan ziehen`.trim()}
-                  title={tile.payload.kind === 'viertelkreis' ? 'Viertelkreis, Radius 1 m' : `${tile.label} m`}
-                  className={`flex min-w-[3.25rem] cursor-pointer select-none touch-none flex-col items-center gap-1 rounded-md border px-2 py-1.5 ${
-                    isArmed
-                      ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-contrast)]'
-                      : 'border-[var(--color-panel-stroke)] bg-[var(--color-surface)] text-[var(--color-text)] hover:border-[var(--color-accent)]'
-                  }`}
-                >
-                  <span className="flex h-[52px] items-end">
-                    <svg
-                      width={g.w * scale + 4}
-                      height={g.d * scale + 4}
-                      viewBox={`-0.08 -0.08 ${g.w + 0.16} ${g.d + 0.16}`}
-                      aria-hidden
-                    >
-                      <PieceShape
-                        piece={g}
-                        fill={isArmed ? 'rgba(255,255,255,0.35)' : 'var(--color-panel-fill)'}
-                        stroke={isArmed ? 'currentColor' : 'var(--color-panel-stroke)'}
-                        strokeWidth={0.06}
-                      />
-                    </svg>
-                  </span>
-                  <span className="text-[11px] leading-none" style={{ fontFamily: 'var(--font-mono)' }}>
-                    {tile.label}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        ))}
-        </div>
-        ))}
-        </div>
-      </div>
+      <PiecePalette armed={armed} hint="Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil. Beim Ziehen zeigen Hilfslinien Fluchten, Abstände und das Gesamtmaß in m. Alt gedrückt halten: frei platzieren, ohne Einrasten." {...paletteCallbacks} />
 
-      <details className="text-xs text-[var(--color-text-muted)]">
-        <summary className="cursor-pointer select-none">Tastatur-Kurzbefehle</summary>
-        <ul className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
-          <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">Klick</kbd> auf den Plan aktiviert die
-            Tastatur
-          </li>
-          <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">↑↓←→</kbd> Auswahl/Cursor um 0,5 m bewegen
-          </li>
-          <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">Umschalt</kbd>+
-            <kbd className="rounded border border-[var(--color-border)] px-1">↑↓←→</kbd> um 1 m. Ohne Auswahl verschiebt Umschalt+←→ die ganze Fläche
-          </li>
-          <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">Enter</kbd> platzieren
-          </li>
-          <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">Alt</kbd> beim Ziehen – ohne Einrasten (Kollision wird rot)
-          </li>
-          <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">R</kbd> drehen — auch schon während du
-            ein Stück aus der Leiste ziehst, vor dem Loslassen
-          </li>
-          <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">Entf</kbd> entfernen
-          </li>
-          <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">Esc</kbd> bricht ab (auch während des Ziehens) / wählt ab
-          </li>
-          <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">1</kbd>–
-            <kbd className="rounded border border-[var(--color-border)] px-1">4</kbd> Plattengröße (Breite 2 / 1,5 / 1 / 0,5 m, Tiefe 1 m)
-          </li>
-          <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">T</kbd> Dreieckpodest
-          </li>
-          <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+Z</kbd> Rückgängig
-          </li>
-          <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+A</kbd> alles auswählen
-          </li>
-          <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+D</kbd> Auswahl duplizieren (rechts daneben)
-          </li>
-          <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+Umschalt+Z</kbd> oder
-            <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+Y</kbd> Wiederholen
-          </li>
-        </ul>
-      </details>
+      <ShortcutHelp />
     </div>
   );
 }
