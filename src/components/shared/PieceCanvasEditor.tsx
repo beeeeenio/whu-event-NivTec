@@ -4,6 +4,7 @@ import {
   fitsAt,
   makePieceId,
   placeUnsnapped,
+  rotatePieceInPlace,
   shiftPieces,
   type FilledPiece,
   type PlacementOptions,
@@ -33,6 +34,7 @@ import { DragOverlay } from './editor/DragOverlay';
 import { EditorToolbar } from './editor/EditorToolbar';
 import { PiecePalette } from './editor/PiecePalette';
 import { PieceShape } from './editor/PieceShape';
+import { SelectionActionBar, type SelectionAction } from './editor/SelectionActionBar';
 import { ShortcutHelp } from './editor/ShortcutHelp';
 import { ZoomControls } from './editor/ZoomControls';
 import type { DragState, PaletteDragState } from './editor/types';
@@ -133,6 +135,18 @@ function round1(v: number): number {
 
 const QUICK_WIDTHS = [2, 1.5, 1, 0.5] as const;
 
+/** Breite der schwebenden Aktionsleiste in px (für das Einklemmen am rechten Rand). */
+const SELECTION_BAR_WIDTH_PX = 240;
+/** Höhe der Aktionsleiste in px, für die Position über der Auswahl. */
+const SELECTION_BAR_HEIGHT_PX = 44;
+
+/** Stück nach n 90°-Drehungen (je rotatePieceInPlace): für den gedrehten Geist beim Ziehen. */
+function rotatedBy(piece: Piece2D, turns: number): Piece2D {
+  let r = piece;
+  for (let i = 0; i < turns; i++) r = rotatePieceInPlace(r);
+  return r;
+}
+
 
 export function PieceCanvasEditor({
   pieces,
@@ -161,6 +175,8 @@ export function PieceCanvasEditor({
   const svgRef = useRef<SVGSVGElement>(null);
   // Äußerer Container: Fokusprüfung für die Leertaste (Verschieben), siehe unten.
   const containerRef = useRef<HTMLDivElement>(null);
+  // Relativer Wrapper um den Plan: Bezugsrahmen für die schwebende Aktionsleiste und den Drehen-Button.
+  const wrapRef = useRef<HTMLDivElement>(null);
   // Ansicht, die während eines Ziehens (Stück, Palette, Verschieben) eingefroren ist — null = frei.
   const frozenBaseRef = useRef<ViewBox | null>(null);
   // Palette-Ziehen für das Mausrad-Fenster bzw. den nativen Listener (synchron, ohne Render dazwischen).
@@ -205,6 +221,10 @@ export function PieceCanvasEditor({
     setFrozenBaseState(v);
   }
   const [blockedMessage, setBlockedMessage] = useState<string | null>(null);
+  // Position der Aktionsleiste über der Auswahl (Pixel relativ zum Wrapper), im Layout-Effect nachgeführt.
+  const [barPos, setBarPos] = useState<{ left: number; top: number } | null>(null);
+  // Rechtsklick öffnet die Leiste am Cursor; gilt nur, solange die Auswahl dieselbe Liste ist (Referenzgleichheit).
+  const [barAtPointer, setBarAtPointer] = useState<{ left: number; top: number; ids: string[] } | null>(null);
   // Ein Button hat natives Klick-Verhalten, das nach einem echten Ziehen trotzdem feuert
   // (Pointer-Events und das nachfolgende `click` sind getrennte, aufeinanderfolgende Dinge,
   // auch bei Pointer-Capture). Ein Ref statt State, damit der Wert synchron und ohne
@@ -366,7 +386,9 @@ export function PieceCanvasEditor({
 
   // Smart Guides: Live-Fläche des gerade bewegten oder platzierten Einzelstücks. Beim Ziehen eines
   // Einzelstücks ist es das Ziel, sonst das Vorschau-Stück. Gruppen-Drag zeigt bewusst keine Guides.
-  const draggedPiece = drag?.moved && drag.target && !drag.group ? pieces.find((p) => p.id === drag.id) ?? null : null;
+  // Während des Ziehens gedreht: Geist, Maße und Smart Guides nutzen die gedrehten Maße des Stücks.
+  const shownPieces = drag?.rotations && !drag.group ? pieces.map((p) => (p.id === drag.id ? rotatedBy(p, drag.rotations ?? 0) : p)) : pieces;
+  const draggedPiece = drag?.moved && drag.target && !drag.group ? shownPieces.find((p) => p.id === drag.id) ?? null : null;
   const previewSingle = previewPieces?.length === 1 ? previewPieces[0] : null;
   const liveRect: Rect | null =
     draggedPiece && drag?.target
@@ -374,7 +396,7 @@ export function PieceCanvasEditor({
       : previewSingle
         ? { x: previewSingle.x, y: previewSingle.y, w: previewSingle.w, d: previewSingle.d }
         : null;
-  const others = liveRect ? pieces.filter((p) => !(draggedPiece && p.id === draggedPiece.id)) : [];
+  const others = liveRect ? shownPieces.filter((p) => !(draggedPiece && p.id === draggedPiece.id)) : [];
   const liveGeometry = liveRect
     ? {
         guides: alignmentGuides(liveRect, others),
@@ -601,6 +623,29 @@ export function PieceCanvasEditor({
     else fn();
   }
 
+  // Drehen-Button während eines Touch-Ziehens: dreht den Geist um 90° und hält das Ziel um dessen Mitte.
+  // Die Ablage passiert erst beim Loslassen (onEnd), damit das Ganze ein Undo-Schritt bleibt.
+  function rotateDraggedPiece() {
+    const cur = dragRef.current;
+    if (!cur || cur.group || !cur.target) return;
+    const piece = pieces.find((p) => p.id === cur.id);
+    if (!piece) return;
+    const turns = ((cur.rotations ?? 0) + 1) % 4;
+    const before = rotatedBy(piece, cur.rotations ?? 0);
+    const after = rotatedBy(piece, turns);
+    const cx = cur.target.x + before.w / 2;
+    const cy = cur.target.y + before.d / 2;
+    const ox = cx - after.w / 2;
+    const oy = cy - after.d / 2;
+    const target =
+      cur.target.valid === false
+        ? placeUnsnapped(pieces, after.w, after.d, ox, oy, piece.id)
+        : { ...findFreePosition(pieces, after.w, after.d, ox, oy, piece.id, placementOptions()), valid: true };
+    const next: DragState = { ...cur, rotations: turns, target };
+    dragRef.current = next;
+    dragThrottle.push(next);
+  }
+
   // Der Greif-Offset bleibt erhalten: das Stück springt nicht mit der Mitte an den Cursor.
   const pieceDrag = usePointerDrag<Piece2D>({
     onStart: (e, piece) => {
@@ -618,6 +663,7 @@ export function PieceCanvasEditor({
         target: null,
         grabOffset: { x: start.x - piece.x, y: start.y - piece.y },
         group: inGroup ? { startX: start.x, startY: start.y, dx: 0, dy: 0, valid: true } : undefined,
+        pointerType: e.pointerType,
       };
       dragRef.current = next;
       setDrag(next);
@@ -647,9 +693,11 @@ export function PieceCanvasEditor({
         if (cur.moved && cur.group.dx === dx && cur.group.dy === dy && cur.group.valid === valid) return;
         next = { ...cur, moved: true, group: { ...cur.group, dx, dy, valid } };
       } else {
+        // Mit gedrehten Maßen rechnen (Drehen während des Ziehens, siehe rotateDraggedPiece).
+        const shape = rotatedBy(piece, cur.rotations ?? 0);
         const target = e.altKey
-          ? placeUnsnapped(pieces, piece.w, piece.d, x - cur.grabOffset.x, y - cur.grabOffset.y, piece.id)
-          : { ...findFreePosition(pieces, piece.w, piece.d, x - cur.grabOffset.x, y - cur.grabOffset.y, piece.id, placementOptions()), valid: true };
+          ? placeUnsnapped(pieces, shape.w, shape.d, x - cur.grabOffset.x, y - cur.grabOffset.y, piece.id)
+          : { ...findFreePosition(pieces, shape.w, shape.d, x - cur.grabOffset.x, y - cur.grabOffset.y, piece.id, placementOptions()), valid: true };
         if (cur.moved && cur.target && cur.target.x === target.x && cur.target.y === target.y && cur.target.valid === target.valid) return;
         next = { ...cur, moved: true, target };
       }
@@ -674,7 +722,19 @@ export function PieceCanvasEditor({
       } else if (cur.moved && cur.target?.valid === false) {
         showBlockedMessage('Dort ist kein Platz – das Stück würde ein anderes überlappen. Nichts verschoben.');
       } else if (cur.moved && cur.target) {
-        onMovePiece(piece.id, cur.target.x, cur.target.y);
+        const { x: tx, y: ty } = cur.target;
+        const turns = cur.rotations ?? 0;
+        // Gedreht abgelegt ist ein einziger Undo-Schritt: mit onReplaceAll ein Ersatz, sonst gebündelt verschieben und drehen.
+        if (turns > 0 && onReplaceAll) {
+          onReplaceAll(pieces.map((q) => (q.id === piece.id ? { ...rotatedBy(piece, turns), x: tx, y: ty } : q)));
+        } else if (turns > 0) {
+          batch(() => {
+            onMovePiece(piece.id, tx, ty);
+            for (let i = 0; i < turns; i++) onRotatePiece(piece.id);
+          });
+        } else {
+          onMovePiece(piece.id, tx, ty);
+        }
         setSelectedId(piece.id);
       } else if (!session.moved) {
         setSelectedId((c) => (c === piece.id ? null : piece.id));
@@ -1146,6 +1206,19 @@ export function PieceCanvasEditor({
     onAddPieces(placed);
   }
 
+  // Rechtsklick auf ein Stück: Leiste am Cursor. Ein nicht ausgewähltes Stück wird allein ausgewählt.
+  // Während eines Paletten-Ziehens dreht der Rechtsklick das Teil (Fenster-Listener), daher hier nichts tun.
+  function handlePieceContextMenu(e: React.MouseEvent<SVGElement>, pieceId: string) {
+    if (paletteDrag || armed) return;
+    e.preventDefault();
+    const nextIds = selectedIds.includes(pieceId) ? selectedIds : [pieceId];
+    setSelectedIds(nextIds);
+    const wr = wrapRef.current?.getBoundingClientRect();
+    if (!wr) return;
+    const left = Math.min(Math.max(0, e.clientX - wr.left), Math.max(0, wr.width - SELECTION_BAR_WIDTH_PX));
+    setBarAtPointer({ left, top: Math.max(0, e.clientY - wr.top + 8), ids: nextIds });
+  }
+
   // Statuszeile der Toolbar: sagt, was gerade passiert bzw. was als Nächstes zu tun ist.
   function statusText(): string {
     return armed
@@ -1174,6 +1247,34 @@ export function PieceCanvasEditor({
   // Gesamtmaß der Mehrfachauswahl (Rahmen mit Maßangabe).
   const selectedRects = selectedIds.length > 1 ? pieces.filter((p) => selectedIds.includes(p.id)) : [];
   const selectionBounds = selectedRects.length > 1 ? unionBounds(selectedRects) : null;
+
+  // Schwebende Aktionsleiste: nur bei Auswahl und ohne laufendes Ziehen, Werkzeug oder Rahmen.
+  const barVisible = selectedIds.length > 0 && !drag?.moved && !armed && !paletteDrag && !marquee;
+  const showMirrorSelected = selectedPiece?.corner !== undefined && selectedPiece.w !== selectedPiece.d;
+  const canRotateSelection = !!selectedPiece || (selectedIds.length > 1 && !!onReplaceAll);
+  const barActions: SelectionAction[] = [
+    { key: 'rotate', label: '⤾ Drehen', ariaLabel: 'Auswahl drehen', onClick: rotateCurrent, disabled: !canRotateSelection },
+    { key: 'duplicate', label: 'Duplizieren', ariaLabel: 'Auswahl duplizieren', onClick: duplicateSelected },
+    ...(showMirrorSelected && onMirrorPiece ? [{ key: 'mirror', label: '⇋ Spiegeln', ariaLabel: 'Stück spiegeln', onClick: mirrorCurrent }] : []),
+    { key: 'remove', label: 'Entfernen', ariaLabel: 'Auswahl entfernen', danger: true, onClick: removeSelected },
+  ];
+  // Bei Touch-Ziehen erscheint ein Drehen-Button, den ein zweiter Finger antippt (Stück bzw. Palette-Kachel).
+  const touchRotating = (paletteDrag?.moved && paletteDrag.pointerType === 'touch') || (drag?.moved && drag.pointerType === 'touch' && !drag.group);
+  // Position über der Auswahl: an Plan-Koordinaten gekoppelt, damit sie Zoom und Ausschnitt folgt.
+  useLayoutEffect(() => {
+    const svg = svgRef.current;
+    const wrap = wrapRef.current;
+    const ctm = svg?.getScreenCTM();
+    const b = unionBounds(pieces.filter((p) => selectedIds.includes(p.id)));
+    if (!barVisible || !svg || !wrap || !ctm || !b) return;
+    const wr = wrap.getBoundingClientRect();
+    const left = Math.min(Math.max(0, ctm.e + b.x * ctm.a - wr.left), Math.max(0, wr.width - SELECTION_BAR_WIDTH_PX));
+    let top = ctm.f + b.y * ctm.d - wr.top - SELECTION_BAR_HEIGHT_PX;
+    // Oberhalb des Plans kein Platz: unterhalb der Auswahl zeigen.
+    if (top < 0) top = ctm.f + (b.y + b.d) * ctm.d - wr.top + 8;
+    setBarPos((cur) => (cur && cur.left === left && cur.top === top ? cur : { left, top }));
+  }, [barVisible, selectedIds, pieces, view, drag, viewBox]);
+  const barShown = barAtPointer && barAtPointer.ids === selectedIds ? barAtPointer : barPos;
 
   // Nach jedem Commit die aktuellen Handler für die Palette aktualisieren (siehe paletteCallbacks);
   // vor jedem Ereignis ist der Ref damit aktuell, ohne während des Renders auf den Ref zuzugreifen.
@@ -1241,7 +1342,7 @@ export function PieceCanvasEditor({
         </div>
       )}
 
-      <div className="relative">
+      <div ref={wrapRef} className="relative">
       <svg
         ref={svgRef}
         viewBox={viewBox}
@@ -1397,6 +1498,7 @@ export function PieceCanvasEditor({
               onPointerLeave={(e) => {
                 if (e.pointerType !== 'touch') setHoveredId((cur) => (cur === p.id ? null : cur));
               }}
+              onContextMenu={(e) => handlePieceContextMenu(e, p.id)}
               dataPiece
               {...pieceDrag.bind(p)}
             >
@@ -1436,7 +1538,7 @@ export function PieceCanvasEditor({
         )}
 
         <DragOverlay
-          pieces={pieces}
+          pieces={shownPieces}
           selectedIds={selectedIds}
           drag={drag}
           previewPieces={previewPieces}
@@ -1446,6 +1548,23 @@ export function PieceCanvasEditor({
           px={metersPerPx}
         />
       </svg>
+      {barVisible && barShown && <SelectionActionBar left={barShown.left} top={barShown.top} actions={barActions} />}
+      {touchRotating && (
+        <button
+          type="button"
+          aria-label="Gezogenes Stück drehen"
+          className="absolute right-2 top-2 z-10 flex h-12 w-12 touch-none select-none items-center justify-center rounded-full border border-[var(--color-accent)] bg-[var(--color-surface)] text-xl text-[var(--color-text)] shadow-md"
+          onPointerDown={(e) => {
+            // Ein zweiter Finger dreht sofort; der Plan darunter bekommt die Geste nicht.
+            e.stopPropagation();
+            e.preventDefault();
+            if (paletteDrag) rotatePaletteDrag();
+            else rotateDraggedPiece();
+          }}
+        >
+          ⤾
+        </button>
+      )}
       {pieces.length === 0 && !armed && !paletteDrag && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-4">
           <div className="pointer-events-auto max-w-sm rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]/95 p-3 text-sm shadow-sm">

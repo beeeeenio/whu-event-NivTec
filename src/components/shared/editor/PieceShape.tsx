@@ -31,6 +31,7 @@ export function PieceShape({
   onLostPointerCapture,
   onPointerEnter,
   onPointerLeave,
+  onContextMenu,
   dataPiece,
   children,
 }: {
@@ -51,6 +52,8 @@ export function PieceShape({
   /** Hover durchreichen (Hervorheben unter der Maus im Editor). */
   onPointerEnter?: (e: React.PointerEvent<SVGElement>) => void;
   onPointerLeave?: (e: React.PointerEvent<SVGElement>) => void;
+  /** Rechtsklick durchreichen (Aktionsleiste am Cursor im Editor). */
+  onContextMenu?: (e: React.MouseEvent<SVGElement>) => void;
   /** Markiert ein platziertes Stück im DOM (data-pce-piece), damit Touch-Gesten am Plan es erkennen. */
   dataPiece?: boolean;
   children?: React.ReactNode;
@@ -72,6 +75,7 @@ export function PieceShape({
     onLostPointerCapture,
     onPointerEnter,
     onPointerLeave,
+    onContextMenu,
   };
   if (piece.corner === undefined) {
     return (

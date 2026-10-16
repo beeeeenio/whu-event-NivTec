@@ -10,6 +10,10 @@ export interface DragState {
   grabOffset: { x: number; y: number };
   /** Nur bei gemeinsamem Verschieben mehrerer ausgewählter Stücke: Startpunkt (Meter) und Versatz. */
   group?: { startX: number; startY: number; dx: number; dy: number; valid: boolean };
+  /** Zeigertyp des Ziehens; der Drehen-Button während des Ziehens erscheint nur bei Touch. */
+  pointerType?: string;
+  /** Anzahl 90°-Drehungen während des Ziehens (0–3), nur bei Einzelstück. Das Stück selbst bleibt unverändert, bis es abgelegt wird. */
+  rotations?: number;
 }
 
 /** Zustand eines laufenden Ziehens einer Kachel aus der Palette. */
