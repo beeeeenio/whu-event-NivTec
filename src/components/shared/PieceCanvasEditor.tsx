@@ -1446,9 +1446,11 @@ export function PieceCanvasEditor({
     const piece = pieces.find((q) => q.id === id);
     if (!piece) return;
     const locked = lockedIds.has(id);
-    if (!locked && editable) setSelectedIds([id]);
+    // Gesperrte Ebene oder Nur-Lesen: nur Fokus, keine Auswahl — die Ansage sagt dann auch nicht "ausgewählt".
+    const selectable = !locked && editable;
+    if (selectable) setSelectedIds([id]);
     pieceElsRef.current.get(id)?.focus();
-    announce(pieceAriaLabel(piece, !locked, locked));
+    announce(pieceAriaLabel(piece, selectable, locked));
   }
 
   // Tastaturfokus auf einem Stück: Fokusring zeigen und das Stück allein auswählen. Nur bei sichtbarem Fokus,
