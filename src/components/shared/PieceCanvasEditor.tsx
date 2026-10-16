@@ -10,6 +10,15 @@ import {
   type Piece2D,
 } from '../../domain/customShape';
 import { checkGroupMove, duplicateWithOffset, rotateGroupAroundCenter, rotatePieceAroundCenter, snapGroupDelta } from '../../domain/pieceOps';
+import {
+  getMemoryClipboard,
+  makeClipboardPayload,
+  parseClipboard,
+  placeClipboard,
+  serializeClipboard,
+  setMemoryClipboard,
+  type PiecesClipboardPayload,
+} from '../../domain/clipboard';
 import { alignmentGuides, nearestGaps, unionBounds, type Rect } from '../../domain/smartGuides';
 import { isSondermassPiece, TRIANGLE_PANEL_SIZE_M } from '../../domain/panels';
 import { triangleHand } from '../../domain/triangle';
@@ -122,6 +131,12 @@ export function PieceCanvasEditor({
 }: Props) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const svgRef = useRef<SVGSVGElement>(null);
+  // Letzte Mausposition über dem Plan — nur Ref, kein State: Ziel für Einfügen am Mauszeiger.
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+  // Aktuelle Stückliste für asynchrone Pfade (Rückfall-Timer beim Einfügen).
+  const piecesRef = useRef(pieces);
+  // Wurde das Einfügen schon über das paste-Ereignis erledigt? Dann greift der Rückfall-Timer nicht.
+  const pasteHandledRef = useRef(false);
   const [armed, setArmedState] = useState<ToolPayload | null>(null);
   const [pointerPos, setPointerPos] = useState<{ x: number; y: number } | null>(null);
   // Alt gedrückt beim Platzieren: freie Lage ohne Einrasten, Überlappung wird rot angezeigt.
@@ -730,7 +745,7 @@ export function PieceCanvasEditor({
 
   // Strg/Cmd-Kurzbefehle am Container: greifen auch, wenn der Fokus auf Palette-Kachel oder Toolbar-Button liegt.
   // Eingabefelder behalten ihre nativen Tasten; IME-Eingaben werden ignoriert.
-  // Copy/Cut/Paste folgen mit T17 und sind hier vorerst ohne Wirkung.
+  // Einfügen läuft über das paste-Ereignis (handleEditorPaste); hier nur der Rückfall, falls kein Ereignis kommt.
   function handleEditorKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     if (isEditableTarget(e.target)) return;
     const action = editorShortcut({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey, altKey: e.altKey, isComposing: e.nativeEvent.isComposing });
@@ -750,7 +765,56 @@ export function PieceCanvasEditor({
     if (action === 'duplicate') {
       e.preventDefault();
       duplicateSelected();
+      return;
     }
+    if (action === 'copy' || action === 'cut') {
+      if (selectedIds.length === 0) return;
+      e.preventDefault();
+      const payload = makeClipboardPayload(pieces, selectedIds);
+      if (!payload) return;
+      setMemoryClipboard(payload);
+      // writeText braucht keine Berechtigungsabfrage; scheitert es, bleibt die interne Zwischenablage.
+      void navigator.clipboard?.writeText(serializeClipboard(payload)).catch(() => {});
+      if (action === 'cut') removeSelected();
+      return;
+    }
+    if (action === 'paste') {
+      // Ohne paste-Ereignis (Fokus auf nicht editierbarem Element) fügt der Timer die interne Zwischenablage ein.
+      pasteHandledRef.current = false;
+      setTimeout(() => {
+        if (pasteHandledRef.current) return;
+        const m = getMemoryClipboard();
+        if (m) pastePayload(m);
+      }, 0);
+    }
+  }
+
+  // Einfügen über das paste-Ereignis: der Text kommt direkt aus dem Ereignis, daher kein readText und keine Berechtigungsabfrage.
+  // Fremder Text wird ignoriert, dann gilt die interne Zwischenablage.
+  function handleEditorPaste(e: React.ClipboardEvent<HTMLDivElement>) {
+    if (isEditableTarget(e.target)) return;
+    const text = e.clipboardData?.getData('text/plain') ?? '';
+    const payload = parseClipboard(text) ?? getMemoryClipboard();
+    if (!payload) return;
+    e.preventDefault();
+    pasteHandledRef.current = true;
+    pastePayload(payload);
+  }
+
+  // Fügt die Zwischenablage an der Mausposition ein (sonst rechts neben dem Bestand). Die Kopie wird danach ausgewählt.
+  function pastePayload(payload: PiecesClipboardPayload) {
+    const placed = placeClipboard(piecesRef.current, payload, lastPointerRef.current);
+    if (!placed) {
+      showBlockedMessage('Kein freier Platz zum Einfügen gefunden.');
+      return;
+    }
+    if (onInsertPieces) {
+      const withIds = placed.map((p) => ({ ...p, id: makePieceId() }));
+      onInsertPieces(withIds);
+      setSelectedIds(withIds.map((p) => p.id));
+      return;
+    }
+    onAddPieces(placed);
   }
 
   // Statuszeile der Toolbar: sagt, was gerade passiert bzw. was als Nächstes zu tun ist.
@@ -773,8 +837,12 @@ export function PieceCanvasEditor({
   useLayoutEffect(() => {
     paletteHandlersRef.current = { down: handlePaletteButtonPointerDown, move: handlePaletteButtonPointerMove, up: handlePaletteButtonPointerUp, arm };
   });
+  // Stückliste für den Rückfall-Timer beim Einfügen aktuell halten (siehe piecesRef).
+  useLayoutEffect(() => {
+    piecesRef.current = pieces;
+  });
   return (
-    <div className="space-y-3" onKeyDown={handleEditorKeyDown}>
+    <div className="space-y-3" onKeyDown={handleEditorKeyDown} onPaste={handleEditorPaste}>
       <EditorToolbar
         statusText={statusText()}
         onUndo={onUndo}
@@ -830,6 +898,12 @@ export function PieceCanvasEditor({
         aria-label="Bau-Editor — klicken und dann Tastatur nutzen (Pfeiltasten, Enter, R, Entf, Esc, 1–4, T; Kurzbefehle siehe unten)"
         tabIndex={0}
         onKeyDown={handleCanvasKeyDown}
+        onPointerMove={(e) => {
+          lastPointerRef.current = svgPointFromClient(e.clientX, e.clientY);
+        }}
+        onPointerLeave={() => {
+          lastPointerRef.current = null;
+        }}
       >
         <CanvasGrid
           uid={uid}
