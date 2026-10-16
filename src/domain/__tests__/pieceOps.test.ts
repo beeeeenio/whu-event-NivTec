@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { addFilledPieces, movePieceTo, movePiecesBy, removePieceById, removePiecesByIds, rotatePieceById } from '../pieceOps';
+import { addFilledPieces, checkGroupMove, movePieceTo, movePiecesBy, removePieceById, removePiecesByIds, rotatePieceById } from '../pieceOps';
 import type { Piece2D } from '../customShape';
 
 describe('pieceOps', () => {
@@ -172,6 +172,37 @@ describe('pieceOps', () => {
       expect(r2).toBe(pieces);
       expect(r3).toBe(pieces);
       expect(r4).toBe(pieces);
+    });
+  });
+
+  describe('checkGroupMove', () => {
+    const a: Piece2D = { id: 'a', x: 0, y: 0, w: 2, d: 1 };
+    const b: Piece2D = { id: 'b', x: 2, y: 0, w: 2, d: 1 };
+    const c: Piece2D = { id: 'c', x: 0, y: 2, w: 2, d: 1 };
+    const all = [a, b, c];
+
+    it('erlaubt eine Verschiebung in freien Raum', () => {
+      expect(checkGroupMove(all, ['a'], 0, 1)).toBe('ok');
+    });
+
+    it('meldet out-of-bounds bei Verschiebung über den linken Rand', () => {
+      expect(checkGroupMove(all, ['a'], -0.5, 0)).toBe('out-of-bounds');
+    });
+
+    it('meldet collision bei Überlappung mit einem anderen Stück', () => {
+      expect(checkGroupMove(all, ['a'], 1, 0)).toBe('collision');
+    });
+
+    it('erlaubt gemeinsame Verschiebung, wenn sich die Auswahl nur untereinander berührt', () => {
+      expect(checkGroupMove(all, ['a', 'b'], 1, 0)).toBe('ok');
+    });
+
+    it('erlaubt Berühren einer Kante ohne Überlappung', () => {
+      expect(checkGroupMove(all, ['a'], 0, 1)).toBe('ok');
+    });
+
+    it('ist für eine leere Auswahl immer ok', () => {
+      expect(checkGroupMove(all, [], 5, 5)).toBe('ok');
     });
   });
 });

@@ -6,6 +6,7 @@ import {
   type FilledPiece,
   type Piece2D,
 } from '../../domain/customShape';
+import { checkGroupMove } from '../../domain/pieceOps';
 import { isSondermassPiece, TRIANGLE_PANEL_SIZE_M, QUARTER_CIRCLE_RADIUS_M, RECT_CATALOG } from '../../domain/panels';
 import { mirrorTriangleCornerDiagonal, nextTriangleCorner, quarterCirclePath, triangleHand, trianglePoints } from '../../domain/triangle';
 import type { TriangleCorner } from '../../domain/types';
@@ -128,6 +129,7 @@ function PieceShape({
   fillOpacity,
   stroke,
   strokeWidth,
+  strokeDasharray,
   pointerEvents,
   style,
   onPointerDown,
@@ -142,6 +144,7 @@ function PieceShape({
   fillOpacity?: number;
   stroke: string;
   strokeWidth: number;
+  strokeDasharray?: string;
   pointerEvents?: 'all' | 'none';
   style?: React.CSSProperties;
   onPointerDown?: (e: React.PointerEvent<SVGElement>) => void;
@@ -156,6 +159,7 @@ function PieceShape({
     fillOpacity,
     stroke,
     strokeWidth,
+    strokeDasharray,
     pointerEvents,
     style,
     onPointerDown,
@@ -214,7 +218,7 @@ interface DragState {
   moved: boolean;
   target: { x: number; y: number } | null;
   /** Nur bei gemeinsamem Verschieben mehrerer ausgewählter Stücke: Startpunkt (Meter) und Versatz. */
-  group?: { startX: number; startY: number; dx: number; dy: number };
+  group?: { startX: number; startY: number; dx: number; dy: number; valid: boolean };
 }
 
 interface PaletteDragState {
@@ -274,10 +278,20 @@ export function PieceCanvasEditor({
     setPointerPos(null);
   }
 
+  // Ein laufender Timer wird vor jedem neuen Hinweis verworfen, damit die zweite Meldung
+  // volle 2,5 s stehen bleibt und der alte Timer sie nicht vorzeitig ausblendet.
+  const blockedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   function showBlockedMessage(text: string) {
     setBlockedMessage(text);
-    setTimeout(() => setBlockedMessage((cur) => (cur === text ? null : cur)), 2500);
+    if (blockedTimerRef.current) clearTimeout(blockedTimerRef.current);
+    blockedTimerRef.current = setTimeout(() => {
+      blockedTimerRef.current = null;
+      setBlockedMessage(null);
+    }, 2500);
   }
+  useEffect(() => () => {
+    if (blockedTimerRef.current) clearTimeout(blockedTimerRef.current);
+  }, []);
 
   const contentWidthM = Math.max(
     pieces.reduce((m, p) => Math.max(m, p.x + p.w), 0),
@@ -474,7 +488,7 @@ export function PieceCanvasEditor({
       startClientY: e.clientY,
       moved: false,
       target: null,
-      group: inGroup ? { startX: start.x, startY: start.y, dx: 0, dy: 0 } : undefined,
+      group: inGroup ? { startX: start.x, startY: start.y, dx: 0, dy: 0, valid: true } : undefined,
     });
   }
 
@@ -490,10 +504,8 @@ export function PieceCanvasEditor({
       const minY = Math.min(...moving.map((p) => p.y));
       const dx = Math.max(-minX, snap(x - drag.group.startX));
       const dy = Math.max(-minY, snap(y - drag.group.startY));
-      const others = pieces.filter((p) => !selectedIds.includes(p.id));
-      const free = moving.every((p) => fitsAt(others, p.x + dx, p.y + dy, p.w, p.d));
-      if (free) setDrag((d) => (d && d.group ? { ...d, moved: true, group: { ...d.group, dx, dy } } : d));
-      else setDrag((d) => (d ? { ...d, moved: true } : d));
+      const valid = checkGroupMove(pieces, selectedIds, dx, dy) === 'ok';
+      setDrag((d) => (d && d.group ? { ...d, moved: true, group: { ...d.group, dx, dy, valid } } : d));
       return;
     }
     const target = findFreePosition(pieces, piece.w, piece.d, x - piece.w / 2, y - piece.d / 2, piece.id);
@@ -502,10 +514,12 @@ export function PieceCanvasEditor({
 
   function handlePiecePointerUp(piece: Piece2D) {
     if (drag?.id === piece.id && drag.group) {
-      const { dx, dy } = drag.group;
-      if (drag.moved && (dx !== 0 || dy !== 0)) {
+      const { dx, dy, valid } = drag.group;
+      if (drag.moved && valid && (dx !== 0 || dy !== 0)) {
         if (onMovePieces) onMovePieces(selectedIds, dx, dy);
         else pieces.filter((p) => selectedIds.includes(p.id)).forEach((p) => onMovePiece(p.id, round1(p.x + dx), round1(p.y + dy)));
+      } else if (drag.moved && !valid) {
+        showBlockedMessage('Dort ist kein Platz – die Auswahl würde andere Stücke überlappen. Nichts verschoben.');
       }
     } else if (drag?.id === piece.id) {
       if (drag.moved && drag.target) {
@@ -940,10 +954,11 @@ export function PieceCanvasEditor({
               <PieceShape
                 key={`ghost-${p.id}`}
                 piece={{ ...p, x: p.x + drag.group!.dx, y: p.y + drag.group!.dy }}
-                fill="var(--color-accent)"
-                fillOpacity={0.35}
-                stroke="var(--color-accent)"
+                fill={drag.group!.valid ? 'var(--color-accent)' : 'var(--color-danger)'}
+                fillOpacity={drag.group!.valid ? 0.35 : 0.2}
+                stroke={drag.group!.valid ? 'var(--color-accent)' : 'var(--color-danger)'}
                 strokeWidth={0.03}
+                strokeDasharray={drag.group!.valid ? undefined : '0.08 0.06'}
                 style={{ pointerEvents: 'none' }}
               />
             ))}
