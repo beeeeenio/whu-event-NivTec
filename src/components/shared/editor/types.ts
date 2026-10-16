@@ -3,9 +3,6 @@ import type { ToolPayload } from '../../../domain/toolPayload';
 /** Zustand eines laufenden Ziehens eines platzierten Stücks (oder einer Auswahl). */
 export interface DragState {
   id: string;
-  pointerType: string;
-  startClientX: number;
-  startClientY: number;
   moved: boolean;
   /** valid=false: Ziel würde ein anderes Stück überlappen (nur mit Alt, ungerastert möglich). */
   target: { x: number; y: number; valid?: boolean } | null;

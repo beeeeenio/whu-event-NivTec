@@ -15,6 +15,7 @@ import { triangleHand } from '../../domain/triangle';
 import { mirrorPayload, payloadMatches, payloadSize, payloadToFilled, rotatePayload, type ToolPayload } from '../../domain/toolPayload';
 import { formatMeters } from '../../lib/format';
 import { dragThresholdPx, isPrimaryButton, shouldRotateOnWheel } from '../../lib/pointer';
+import { createFrameThrottle } from '../../lib/pointerDrag';
 import { isEditableTarget, undoRedoAction } from '../../lib/shortcuts';
 import { CanvasGrid } from './editor/CanvasGrid';
 import { DragOverlay } from './editor/DragOverlay';
@@ -23,6 +24,7 @@ import { PiecePalette } from './editor/PiecePalette';
 import { PieceShape } from './editor/PieceShape';
 import { ShortcutHelp } from './editor/ShortcutHelp';
 import type { DragState, PaletteDragState } from './editor/types';
+import { usePointerDrag } from '../../hooks/usePointerDrag';
 
 interface Props {
   pieces: Piece2D[];
@@ -374,18 +376,7 @@ export function PieceCanvasEditor({
     };
   }, [dragging]);
 
-  // Esc bricht auch ein laufendes Ziehen eines platzierten Stücks ab — ohne Commit, ohne Undo-Eintrag.
   const pieceDragging = drag !== null;
-  useEffect(() => {
-    if (!pieceDragging) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      setDrag(null);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [pieceDragging]);
 
   // Alt-Taste beim Platzieren (Klick-Werkzeug oder Paletten-Ziehen): fensterweit beobachtet, damit
   // Alt auch ankommt, wenn der Cursor gerade nicht über dem Plan ist. Alt allein würde unter Windows
@@ -412,64 +403,20 @@ export function PieceCanvasEditor({
     };
   }, [placing]);
 
-  // Der Greif-Offset bleibt erhalten: das Stück springt nicht mit der Mitte an den Cursor.
-  function handlePiecePointerDown(e: React.PointerEvent<SVGElement>, piece: Piece2D) {
-    if (!isPrimaryButton(e)) return;
-    if (armed) return;
-    e.stopPropagation();
-    if (e.shiftKey) {
-      setSelectedIds((cur) => (cur.includes(piece.id) ? cur.filter((id) => id !== piece.id) : [...cur, piece.id]));
-      return;
-    }
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {
-      // setPointerCapture kann ohne aktiven, vom Browser registrierten Pointer werfen
-      // (z.B. bei synthetisch erzeugten Events) — das Ziehen funktioniert trotzdem.
-    }
-    const inGroup = selectedIds.length > 1 && selectedIds.includes(piece.id);
-    const start = svgPointFromClient(e.clientX, e.clientY);
-    setDrag({
-      id: piece.id,
-      pointerType: e.pointerType,
-      startClientX: e.clientX,
-      startClientY: e.clientY,
-      moved: false,
-      target: null,
-      grabOffset: { x: start.x - piece.x, y: start.y - piece.y },
-      group: inGroup ? { startX: start.x, startY: start.y, dx: 0, dy: 0, valid: true } : undefined,
-    });
-  }
+  // Ziehen platzierter Stücke läuft über den Hook (Schwelle je Zeigertyp, Pointer-Capture, Esc, pointercancel).
+  // dragRef spiegelt den DragState synchron: Zieh-Updates rechnen gegen den letzten Wert statt gegen den
+  // React-State, und gerendert wird höchstens einmal je Frame über dragThrottle.
+  const dragRef = useRef<DragState | null>(null);
+  const dragThrottle = useMemo(() => createFrameThrottle<DragState | null>((v) => setDrag(v)), []);
+  useEffect(() => () => dragThrottle.cancel(), [dragThrottle]);
 
-  function handlePiecePointerMove(e: React.PointerEvent<SVGElement>, piece: Piece2D) {
-    if (!drag || drag.id !== piece.id) return;
-    const movedPx = Math.hypot(e.clientX - drag.startClientX, e.clientY - drag.startClientY);
-    if (movedPx < dragThresholdPx(drag.pointerType)) return;
-    const { x, y } = svgPointFromClient(e.clientX, e.clientY);
-    if (drag.group) {
-      let dx: number;
-      let dy: number;
-      if (e.altKey) {
-        // Mit Alt ungerastert, nur auf cm gerundet – und nie links/oben über den Plan hinaus.
-        const moving = pieces.filter((p) => selectedIds.includes(p.id));
-        const minX = Math.min(...moving.map((p) => p.x));
-        const minY = Math.min(...moving.map((p) => p.y));
-        dx = Math.max(-minX, Math.round((x - drag.group.startX) * 100) / 100);
-        dy = Math.max(-minY, Math.round((y - drag.group.startY) * 100) / 100);
-      } else {
-        // Einrasten an Kanten der übrigen Stücke, sonst aufs Raster.
-        ({ dx, dy } = snapGroupDelta(pieces, selectedIds, x - drag.group.startX, y - drag.group.startY, SNAP_TOLERANCE_PX * metersPerPx));
-      }
-      const valid = checkGroupMove(pieces, selectedIds, dx, dy) === 'ok';
-      if (drag.moved && drag.group.dx === dx && drag.group.dy === dy && drag.group.valid === valid) return;
-      setDrag((d) => (d && d.group ? { ...d, moved: true, group: { ...d.group, dx, dy, valid } } : d));
-      return;
-    }
-    const target = e.altKey
-      ? placeUnsnapped(pieces, piece.w, piece.d, x - drag.grabOffset.x, y - drag.grabOffset.y, piece.id)
-      : { ...findFreePosition(pieces, piece.w, piece.d, x - drag.grabOffset.x, y - drag.grabOffset.y, piece.id, placementOptions()), valid: true };
-    if (drag.moved && drag.target && drag.target.x === target.x && drag.target.y === target.y && drag.target.valid === target.valid) return;
-    setDrag((d) => (d ? { ...d, moved: true, target } : d));
+  // Abbruch eines laufenden Ziehens (Esc, pointercancel, verlorene Pointer-Capture): nur verwerfen,
+  // nichts committen, daher kein Undo-Schritt. lostpointercapture feuert erst nach pointerup, das
+  // bereits committet hat — dort ist das Aufräumen nur noch harmlos.
+  function cancelPieceDrag() {
+    dragThrottle.cancel();
+    dragRef.current = null;
+    setDrag(null);
   }
 
   // Mehrere Callback-Aufrufe als ein Undo-Schritt (fällt ohne onTransact auf direkten Aufruf zurück).
@@ -478,34 +425,85 @@ export function PieceCanvasEditor({
     else fn();
   }
 
-  function handlePiecePointerUp(piece: Piece2D) {
-    if (drag?.id === piece.id && drag.group) {
-      const { dx, dy, valid } = drag.group;
-      if (drag.moved && valid && (dx !== 0 || dy !== 0)) {
-        if (onMovePieces) onMovePieces(selectedIds, dx, dy);
-        else batch(() => pieces.filter((p) => selectedIds.includes(p.id)).forEach((p) => onMovePiece(p.id, round1(p.x + dx), round1(p.y + dy))));
-      } else if (drag.moved && !valid) {
-        showBlockedMessage('Dort ist kein Platz – die Auswahl würde andere Stücke überlappen. Nichts verschoben.');
+  // Der Greif-Offset bleibt erhalten: das Stück springt nicht mit der Mitte an den Cursor.
+  const pieceDrag = usePointerDrag<Piece2D>({
+    onStart: (e, piece) => {
+      if (armed) return false;
+      e.stopPropagation();
+      if (e.shiftKey) {
+        setSelectedIds((cur) => (cur.includes(piece.id) ? cur.filter((id) => id !== piece.id) : [...cur, piece.id]));
+        return false;
       }
-    } else if (drag?.id === piece.id) {
-      if (drag.moved && drag.target?.valid === false) {
-        showBlockedMessage('Dort ist kein Platz – das Stück würde ein anderes überlappen. Nichts verschoben.');
-      } else if (drag.moved && drag.target) {
-        onMovePiece(piece.id, drag.target.x, drag.target.y);
-        setSelectedId(piece.id);
+      const inGroup = selectedIds.length > 1 && selectedIds.includes(piece.id);
+      const start = svgPointFromClient(e.clientX, e.clientY);
+      const next: DragState = {
+        id: piece.id,
+        moved: false,
+        target: null,
+        grabOffset: { x: start.x - piece.x, y: start.y - piece.y },
+        group: inGroup ? { startX: start.x, startY: start.y, dx: 0, dy: 0, valid: true } : undefined,
+      };
+      dragRef.current = next;
+      setDrag(next);
+      return true;
+    },
+    onMove: (e, _session, piece) => {
+      const cur = dragRef.current;
+      if (!cur) return;
+      const { x, y } = svgPointFromClient(e.clientX, e.clientY);
+      let next: DragState;
+      if (cur.group) {
+        let dx: number;
+        let dy: number;
+        if (e.altKey) {
+          // Mit Alt ungerastert, nur auf cm gerundet – und nie links/oben über den Plan hinaus.
+          const moving = pieces.filter((p) => selectedIds.includes(p.id));
+          const minX = Math.min(...moving.map((p) => p.x));
+          const minY = Math.min(...moving.map((p) => p.y));
+          dx = Math.max(-minX, Math.round((x - cur.group.startX) * 100) / 100);
+          dy = Math.max(-minY, Math.round((y - cur.group.startY) * 100) / 100);
+        } else {
+          // Einrasten an Kanten der übrigen Stücke, sonst aufs Raster.
+          ({ dx, dy } = snapGroupDelta(pieces, selectedIds, x - cur.group.startX, y - cur.group.startY, SNAP_TOLERANCE_PX * metersPerPx));
+        }
+        const valid = checkGroupMove(pieces, selectedIds, dx, dy) === 'ok';
+        if (cur.moved && cur.group.dx === dx && cur.group.dy === dy && cur.group.valid === valid) return;
+        next = { ...cur, moved: true, group: { ...cur.group, dx, dy, valid } };
       } else {
-        setSelectedId((cur) => (cur === piece.id ? null : piece.id));
+        const target = e.altKey
+          ? placeUnsnapped(pieces, piece.w, piece.d, x - cur.grabOffset.x, y - cur.grabOffset.y, piece.id)
+          : { ...findFreePosition(pieces, piece.w, piece.d, x - cur.grabOffset.x, y - cur.grabOffset.y, piece.id, placementOptions()), valid: true };
+        if (cur.moved && cur.target && cur.target.x === target.x && cur.target.y === target.y && cur.target.valid === target.valid) return;
+        next = { ...cur, moved: true, target };
       }
-    }
-    setDrag(null);
-  }
-
-  // Abbruch eines laufenden Ziehens (Esc, pointercancel, verlorene Pointer-Capture): nur verwerfen,
-  // nichts committen, daher kein Undo-Schritt. lostpointercapture feuert erst nach pointerup, das
-  // bereits committet hat — dort ist setDrag(null) nur noch ein harmloses Aufräumen.
-  function cancelPieceDrag() {
-    setDrag(null);
-  }
+      dragRef.current = next;
+      dragThrottle.push(next);
+    },
+    onEnd: (_e, session, piece) => {
+      const cur = dragRef.current;
+      dragThrottle.cancel();
+      setDrag(null);
+      dragRef.current = null;
+      if (!cur) return;
+      if (cur.group) {
+        const { dx, dy, valid } = cur.group;
+        if (cur.moved && valid && (dx !== 0 || dy !== 0)) {
+          if (onMovePieces) onMovePieces(selectedIds, dx, dy);
+          else batch(() => pieces.filter((p) => selectedIds.includes(p.id)).forEach((p) => onMovePiece(p.id, round1(p.x + dx), round1(p.y + dy))));
+        } else if (cur.moved && !valid) {
+          showBlockedMessage('Dort ist kein Platz – die Auswahl würde andere Stücke überlappen. Nichts verschoben.');
+        }
+      } else if (cur.moved && cur.target?.valid === false) {
+        showBlockedMessage('Dort ist kein Platz – das Stück würde ein anderes überlappen. Nichts verschoben.');
+      } else if (cur.moved && cur.target) {
+        onMovePiece(piece.id, cur.target.x, cur.target.y);
+        setSelectedId(piece.id);
+      } else if (!session.moved) {
+        setSelectedId((c) => (c === piece.id ? null : piece.id));
+      }
+    },
+    onCancel: cancelPieceDrag,
+  });
 
   const selectedPiece = selectedId ? pieces.find((p) => p.id === selectedId) ?? null : null;
 
@@ -627,7 +625,7 @@ export function PieceCanvasEditor({
   function handleCanvasKeyDown(e: React.KeyboardEvent<SVGSVGElement>) {
     if (e.nativeEvent.isComposing) return;
     if (e.key === 'Escape') {
-      setDrag(null);
+      pieceDrag.cancel();
       setPaletteDrag(null);
       arm(null);
       return;
@@ -845,11 +843,7 @@ export function PieceCanvasEditor({
               strokeWidth={selectedIds.includes(p.id) ? 0.035 : 0.02}
               pointerEvents={interactive ? 'all' : 'none'}
               style={{ cursor: interactive ? 'grab' : 'default' }}
-              onPointerDown={(e) => handlePiecePointerDown(e, p)}
-              onPointerMove={(e) => handlePiecePointerMove(e, p)}
-              onPointerUp={() => handlePiecePointerUp(p)}
-              onPointerCancel={cancelPieceDrag}
-              onLostPointerCapture={cancelPieceDrag}
+              {...pieceDrag.bind(p)}
             >
               <title>
                 {formatMeters(p.w, 2)}×{formatMeters(p.d, 2)} m bei x={formatMeters(p.x, 2)}, y={formatMeters(p.y, 2)} m
