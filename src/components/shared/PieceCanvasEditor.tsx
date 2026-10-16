@@ -10,13 +10,12 @@ import {
 import { checkGroupMove, duplicateWithOffset } from '../../domain/pieceOps';
 import { alignmentGuides, nearestGaps, unionBounds, type AlignmentGuide, type GapMeasure, type Rect } from '../../domain/smartGuides';
 import { isSondermassPiece, TRIANGLE_PANEL_SIZE_M, QUARTER_CIRCLE_RADIUS_M, RECT_CATALOG } from '../../domain/panels';
-import { mirrorTriangleCornerDiagonal, nextTriangleCorner, quarterCirclePath, triangleHand, trianglePoints } from '../../domain/triangle';
+import { quarterCirclePath, triangleHand, trianglePoints } from '../../domain/triangle';
+import { mirrorPayload, payloadMatches, payloadSize, payloadToFilled, rotatePayload, type ToolPayload } from '../../domain/toolPayload';
 import type { TriangleCorner } from '../../domain/types';
 import { formatMeters } from '../../lib/format';
 import { dragThresholdPx, isPrimaryButton, shouldRotateOnWheel } from '../../lib/pointer';
 import { isEditableTarget, undoRedoAction } from '../../lib/shortcuts';
-
-type ToolPayload = { kind: 'piece'; w: number; d: number } | { kind: 'triangle'; corner: TriangleCorner; w: number; d: number } | { kind: 'viertelkreis'; corner: TriangleCorner };
 
 interface Props {
   pieces: Piece2D[];
@@ -121,13 +120,6 @@ const GALLERY_GROUPS: { title: string; tiles: GalleryTile[] }[] = [
     ],
   },
 ];
-
-function payloadMatches(armed: ToolPayload | null, tile: ToolPayload): boolean {
-  if (!armed || armed.kind !== tile.kind) return false;
-  if (armed.kind === 'piece' && tile.kind === 'piece') return armed.w === tile.w && armed.d === tile.d;
-  if (armed.kind === 'triangle' && tile.kind === 'triangle') return armed.w === tile.w && armed.d === tile.d;
-  return true;
-}
 
 interface ShapeGeometry {
   x: number;
@@ -489,17 +481,9 @@ export function PieceCanvasEditor({
   // Cursor über dem Canvas ist) — eine einzige Vorschau-Quelle für beide Wege.
   function previewForPayload(payload: ToolPayload | null): FilledPiece[] | null {
     if (!payload || !pointerPos) return null;
-    if (payload.kind === 'piece') {
-      const pos = findFreePosition(pieces, payload.w, payload.d, pointerPos.x - payload.w / 2, pointerPos.y - payload.d / 2, undefined, placementOptions());
-      return [{ x: pos.x, y: pos.y, w: payload.w, d: payload.d }];
-    }
-    if (payload.kind === 'viertelkreis') {
-      const r = QUARTER_CIRCLE_RADIUS_M;
-      const pos = findFreePosition(pieces, r, r, pointerPos.x - r / 2, pointerPos.y - r / 2, undefined, placementOptions());
-      return [{ x: pos.x, y: pos.y, w: r, d: r, corner: payload.corner, shape: 'viertelkreis' }];
-    }
-    const pos = findFreePosition(pieces, payload.w, payload.d, pointerPos.x - payload.w / 2, pointerPos.y - payload.d / 2, undefined, placementOptions());
-    return [{ x: pos.x, y: pos.y, w: payload.w, d: payload.d, corner: payload.corner }];
+    const { w, d } = payloadSize(payload);
+    const pos = findFreePosition(pieces, w, d, pointerPos.x - w / 2, pointerPos.y - d / 2, undefined, placementOptions());
+    return [payloadToFilled(payload, pos.x, pos.y)];
   }
 
   // arm(null) beim Start eines Paletten-Ziehens sorgt dafür, dass armed/paletteDrag nie
@@ -531,17 +515,9 @@ export function PieceCanvasEditor({
   // Aufrufer (Klick-Platzieren-Pfad, Paletten-Ziehen UND Tastatur-Platzieren nutzen dieselbe
   // Logik, nur die Umrechnung von Bildschirm- zu Meter-Koordinaten unterscheidet sich).
   function commitPayloadAtPoint(payload: ToolPayload, pos: { x: number; y: number }) {
-    if (payload.kind === 'piece') {
-      const target = findFreePosition(pieces, payload.w, payload.d, pos.x - payload.w / 2, pos.y - payload.d / 2, undefined, placementOptions());
-      onAddPieces([{ x: target.x, y: target.y, w: payload.w, d: payload.d }]);
-    } else if (payload.kind === 'viertelkreis') {
-      const r = QUARTER_CIRCLE_RADIUS_M;
-      const target = findFreePosition(pieces, r, r, pos.x - r / 2, pos.y - r / 2, undefined, placementOptions());
-      onAddPieces([{ x: target.x, y: target.y, w: r, d: r, corner: payload.corner, shape: 'viertelkreis' }]);
-    } else {
-      const target = findFreePosition(pieces, payload.w, payload.d, pos.x - payload.w / 2, pos.y - payload.d / 2, undefined, placementOptions());
-      onAddPieces([{ x: target.x, y: target.y, w: payload.w, d: payload.d, corner: payload.corner }]);
-    }
+    const { w, d } = payloadSize(payload);
+    const target = findFreePosition(pieces, w, d, pos.x - w / 2, pos.y - d / 2, undefined, placementOptions());
+    onAddPieces([payloadToFilled(payload, target.x, target.y)]);
   }
 
   function commitPayloadAt(payload: ToolPayload, clientX: number, clientY: number) {
@@ -582,13 +558,7 @@ export function PieceCanvasEditor({
   // Button behält seinen Fokus über die ganze Zieh-Geste (Pointer-Capture ändert daran nichts),
   // daher reicht ein normaler onKeyDown hier.
   function rotatePaletteDrag() {
-    setPaletteDrag((d) => {
-      if (!d) return d;
-      if (d.payload.kind === 'piece') return { ...d, payload: { kind: 'piece', w: d.payload.d, d: d.payload.w } };
-      if (d.payload.kind === 'triangle') return { ...d, payload: { kind: 'triangle', corner: nextTriangleCorner(d.payload.corner), w: d.payload.d, d: d.payload.w } };
-      if (d.payload.kind === 'viertelkreis') return { ...d, payload: { kind: 'viertelkreis', corner: nextTriangleCorner(d.payload.corner) } };
-      return d;
-    });
+    setPaletteDrag((d) => (d ? { ...d, payload: rotatePayload(d.payload) } : d));
   }
 
   // Fensterweit statt nur am Button: Safari fokussiert Buttons beim Klick nicht, daher kam R dort
@@ -753,12 +723,7 @@ export function PieceCanvasEditor({
 
   function rotateCurrent() {
     if (armed) {
-      setArmedState((cur) => {
-        if (!cur) return cur;
-        if (cur.kind === 'piece') return { kind: 'piece', w: cur.d, d: cur.w };
-        if (cur.kind === 'triangle') return { kind: 'triangle', corner: nextTriangleCorner(cur.corner), w: cur.d, d: cur.w };
-        return { kind: 'viertelkreis', corner: nextTriangleCorner(cur.corner) };
-      });
+      setArmedState((cur) => (cur ? rotatePayload(cur) : cur));
       return;
     }
     rotateSelected();
@@ -766,9 +731,7 @@ export function PieceCanvasEditor({
 
   function mirrorCurrent() {
     if (armed?.kind === 'triangle') {
-      setArmedState((cur) =>
-        cur?.kind === 'triangle' ? { kind: 'triangle', corner: mirrorTriangleCornerDiagonal(cur.corner), w: cur.d, d: cur.w } : cur,
-      );
+      setArmedState((cur) => (cur?.kind === 'triangle' ? mirrorPayload(cur) : cur));
       return;
     }
     if (selectedPiece && onMirrorPiece) onMirrorPiece(selectedPiece.id);
@@ -851,15 +814,7 @@ export function PieceCanvasEditor({
     }
     if (e.key.toLowerCase() === 'r' && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
-      if (selectedPiece) {
-        rotateSelected();
-      } else if (armed?.kind === 'piece') {
-        setArmedState((cur) => (cur?.kind === 'piece' ? { kind: 'piece', w: cur.d, d: cur.w } : cur));
-      } else if (armed?.kind === 'triangle') {
-        setArmedState((cur) => (cur?.kind === 'triangle' ? { kind: 'triangle', corner: nextTriangleCorner(cur.corner), w: cur.d, d: cur.w } : cur));
-      } else if (armed?.kind === 'viertelkreis') {
-        setArmedState((cur) => (cur?.kind === 'viertelkreis' ? { kind: 'viertelkreis', corner: nextTriangleCorner(cur.corner) } : cur));
-      }
+      rotateCurrent();
       return;
     }
     // Umschalt+←/→ ohne Auswahl und ohne Werkzeug verschiebt die ganze Fläche.
