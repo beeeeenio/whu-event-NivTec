@@ -155,15 +155,15 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
   }
 
   // Import-Bericht: verworfene Stücke und neu vergebene IDs aus dem letzten Laden
-  const [importWarnings, setImportWarnings] = useState<string[]>([]);
+  const [importNotes, setImportNotes] = useState<string[]>([]);
 
   function applySavedState(data: unknown): string | null {
     const result = parseTresenFile(data);
     if (!result.ok) {
-      setImportWarnings([]);
+      setImportNotes([]);
       return result.error;
     }
-    setImportWarnings(result.warnings);
+    setImportNotes(result.warnings);
     const v = result.value;
     // Import ist ein einziger Undo-Schritt: beide Höhen und beide Ebenen zusammen.
     doc.set((d) => ({
@@ -199,9 +199,11 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
             namespace="tresen"
             currentData={currentSavedState}
             onLoad={applySavedState}
-            warnings={importWarnings}
           />
         </div>
+        {importNotes.length > 0 && (
+          <WarningBanner onDismiss={() => setImportNotes([])}>Import-Bericht: {importNotes.join(' ')}</WarningBanner>
+        )}
         {restored && (
           <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-accent)]">
             <span>Letzter Stand automatisch wiederhergestellt.</span>

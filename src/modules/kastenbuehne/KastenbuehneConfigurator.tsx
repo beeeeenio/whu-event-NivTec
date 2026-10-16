@@ -11,6 +11,7 @@ import { PlacedPiecesChips } from '../../components/shared/PlacedPiecesChips';
 import { SavedConfigsPanel } from '../../components/shared/SavedConfigsPanel';
 import { StairsRampCalculator } from '../../components/shared/StairsRampCalculator';
 import { SummaryStats } from '../../components/shared/SummaryStats';
+import { WarningBanner } from '../../components/shared/WarningBanner';
 import { buildLayoutFromPieces, normalizeToOrigin } from '../../domain/customShape';
 import {
   addAllFrontEdges,
@@ -143,15 +144,15 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
   const hasContent = pieces.length > 0;
 
   // Import-Bericht: verworfene Stücke/Blenden und neu vergebene IDs aus dem letzten Laden
-  const [importWarnings, setImportWarnings] = useState<string[]>([]);
+  const [importNotes, setImportNotes] = useState<string[]>([]);
 
   function applySavedState(data: unknown): string | null {
     const result = parseKastenbuehneFile(data);
     if (!result.ok) {
-      setImportWarnings([]);
+      setImportNotes([]);
       return result.error;
     }
-    setImportWarnings(result.warnings);
+    setImportNotes(result.warnings);
     const v = result.value;
     // Import ist ein einziger Undo-Schritt: Höhe, Stücke und Blenden zusammen.
     doc.set((d) => ({ heightCm: v.heightCm ?? d.heightCm, pieces: v.pieces, forexPanels: v.forexPanels ?? [] }));
@@ -178,9 +179,11 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
             namespace="kastenbuehne"
             currentData={currentSavedState}
             onLoad={applySavedState}
-            warnings={importWarnings}
           />
         </div>
+        {importNotes.length > 0 && (
+          <WarningBanner onDismiss={() => setImportNotes([])}>Import-Bericht: {importNotes.join(' ')}</WarningBanner>
+        )}
         {restored && (
           <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-accent)]">
             <span>Letzter Stand automatisch wiederhergestellt.</span>

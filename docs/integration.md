@@ -69,6 +69,15 @@ Am saubersten wäre ein kleiner, gemeinsamer JSON-Austausch, der genau `Piece2D`
 
 Die Stadthallen-Software könnte dann spiegelbildlich: ihre eigene Palette um "NivTec-Katalogstücke" (die Tabelle oben) erweitern, ein ausgewähltes Stück als `{x, y, w, d, corner?}` in ihren eigenen Metern-Plan einfügen, und umgekehrt eine solche NivTec-JSON-Datei importieren, um einen kompletten NivTec-Aufbau (Bühne oder Theke) als Gruppe von Stücken in die Gesamtplanung zu übernehmen.
 
+## Dateiformat: Version und Typ
+
+Neue Plan-Dateien (Bühne und Tresen) enthalten zusätzlich:
+
+- `schemaVersion`: die Version des Dateiformats (aktuell `1`).
+- `kind`: der Plan-Typ, `'kastenbuehne'` oder `'tresen'`.
+
+Beide Felder sind optional. Leser dürfen sie ignorieren; alle anderen Felder bleiben unverändert. Dateien ohne `schemaVersion` gelten als Version 0 und laden unverändert.
+
 ## Forex-Blenden (Kastenbühne)
 
 Die Kastenbühnen-Datei (`nivtec-kastenbuehne.json`) kann optional Forex-Blenden enthalten — bedruckte 5-mm-PVC-Hartschaumplatten vor freien Außenkanten. Ältere Dateien ohne das Feld laden unverändert.
