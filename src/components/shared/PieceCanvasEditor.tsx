@@ -497,7 +497,13 @@ export function PieceCanvasEditor({
   useEffect(() => {
     const onDown = (e: KeyboardEvent) => {
       if (e.key !== ' ' || armed || isEditableTarget(e.target)) return;
-      if (!containerRef.current?.contains(document.activeElement)) return;
+      // Plan fokussiert, oder Mauszeiger über dem Plan (dann auch bei fokussiertem Schalter im Editor bzw. ohne Fokus).
+      // Sonst löst die Leertaste einen fokussierten Schalter (Palette, Toolbar) wie gewohnt aus.
+      const active = document.activeElement;
+      const planFocused = active !== null && active === svgRef.current;
+      const overPlan =
+        lastPointerRef.current !== null && (active === document.body || !!containerRef.current?.contains(active));
+      if (!planFocused && !overPlan) return;
       e.preventDefault();
       spaceGrabRef.current = true;
       setSpaceHeld(true);
@@ -651,15 +657,20 @@ export function PieceCanvasEditor({
 
   // Verschieben des Ausschnitts: Leertaste+Ziehen oder mittlere Maustaste. Läuft als eigene Zieh-Sitzung am svg
   // (siehe onPointerDownCapture); die Ansicht friert dabei ein wie beim Stück-Ziehen.
+  const panStartViewRef = useRef<ViewBox | null>(null);
   const panDrag = usePointerDrag<null>(
     {
       onStart: () => {
+        panStartViewRef.current = view ?? effectiveBase;
         setFrozenBase(baseView);
       },
       onMove: (e, s) => {
-        // s.prevX/prevY ist der Punkt vor diesem Ereignis: um die Differenz verschieben, dann bleibt der Plan unter dem Zeiger.
+        // Gegen den Ausschnitt beim Start und den Startpunkt rechnen: so geht auch die Strecke bis zur
+        // Zieh-Schwelle nicht verloren und der Plan bleibt exakt unter dem Zeiger.
+        const startView = panStartViewRef.current;
+        if (!startView) return;
         const k = metersPerPxOf(svgRef.current);
-        setView((v) => panBy(v ?? effectiveBase, -(e.clientX - s.prevX) * k, -(e.clientY - s.prevY) * k));
+        setView(panBy(startView, -(e.clientX - s.startX) * k, -(e.clientY - s.startY) * k));
       },
       onEnd: () => {
         setFrozenBase(null);
