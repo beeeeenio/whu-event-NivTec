@@ -4,7 +4,13 @@ import {
   addAllFrontEdges,
   appendMaterialItems,
   buildForexMaterialItems,
+  forexPrintGroups,
   freeEdges,
+  FRONT_PRINT_GROUP,
+  nextPrintGroupName,
+  pruneForexPrints,
+  setForexPrintGroup,
+  sortPanelsForPrint,
   placeForexPanels,
   toggleForexPanel,
 } from '../forex';
@@ -175,5 +181,53 @@ describe('buildForexMaterialItems', () => {
     const merged = appendMaterialItems(base, extra);
     expect(merged.map((i) => i.pos)).toEqual([1, 2, 3]);
     expect(merged[2].artikel).toBe('Forex 2000 × 590 mm, 5 mm');
+  });
+});
+
+describe('Forex-Drucke', () => {
+  it('„Alle Vorderkanten“ legt die Platten in die Druckgruppe „vorne“', () => {
+    expect(addAllFrontEdges(row, []).every((p) => p.printGroup === FRONT_PRINT_GROUP)).toBe(true);
+  });
+
+  it('Druckreihenfolge: von außen gesehen links → rechts', () => {
+    // Vorderkante (Blick von unten nach oben im Plan): links = kleines x
+    const front = placeForexPanels(row, [
+      { id: 'fx-2', pieceId: 'piece-2', side: 'bottom' },
+      { id: 'fx-1', pieceId: 'piece-1', side: 'bottom' },
+    ]);
+    expect(sortPanelsForPrint(front).map((p) => p.panel.id)).toEqual(['fx-1', 'fx-2']);
+    // Hinterkante (Blick von oben): für den Betrachter liegt großes x links
+    const back = placeForexPanels(row, [
+      { id: 'fx-3', pieceId: 'piece-3', side: 'top' },
+      { id: 'fx-4', pieceId: 'piece-2', side: 'top' },
+    ]);
+    expect(sortPanelsForPrint(back).map((p) => p.panel.id)).toEqual(['fx-4', 'fx-3']);
+  });
+
+  it('gruppiert nach printGroup, Platten ohne Gruppe bekommen einen eigenen Druck', () => {
+    const placed = placeForexPanels(row, [
+      { id: 'fx-2', pieceId: 'piece-2', side: 'bottom', printGroup: 'vorne' },
+      { id: 'fx-1', pieceId: 'piece-1', side: 'bottom', printGroup: 'vorne' },
+      { id: 'fx-3', pieceId: 'piece-1', side: 'left' },
+    ]);
+    const groups = forexPrintGroups(placed);
+    expect(groups.map((g) => [g.key, g.panels.map((p) => p.panel.id), g.lengthM])).toEqual([
+      ['vorne', ['fx-1', 'fx-2'], 4],
+      ['#fx-3', ['fx-3'], 1],
+    ]);
+  });
+
+  it('setzt und löst Druckgruppen, ohne andere Felder zu verlieren', () => {
+    const panels: ForexPanel[] = [{ id: 'fx-1', pieceId: 'piece-1', side: 'bottom', thicknessMm: 5, printGroup: 'vorne' }];
+    expect(setForexPrintGroup(panels, 'fx-1', undefined)).toEqual([{ id: 'fx-1', pieceId: 'piece-1', side: 'bottom', thicknessMm: 5 }]);
+    expect(setForexPrintGroup(panels, 'fx-1', 'druck-1')[0].printGroup).toBe('druck-1');
+    expect(nextPrintGroupName([...panels, { id: 'fx-2', pieceId: 'p', side: 'top', printGroup: 'druck-1' }])).toBe('druck-2');
+  });
+
+  it('verwirft Drucke von Blenden, die es nicht mehr gibt', () => {
+    const prints = { 'fx-1': 'data:a', 'fx-9': 'data:b' };
+    expect(pruneForexPrints(prints, [{ id: 'fx-1', pieceId: 'piece-1', side: 'bottom' }])).toEqual({ 'fx-1': 'data:a' });
+    const same = { 'fx-1': 'data:a' };
+    expect(pruneForexPrints(same, [{ id: 'fx-1', pieceId: 'piece-1', side: 'bottom' }])).toBe(same);
   });
 });

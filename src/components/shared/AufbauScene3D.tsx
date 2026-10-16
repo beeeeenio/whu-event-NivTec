@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { OrbitControls } from '@react-three/drei';
 import { Canvas, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -345,23 +345,44 @@ function RectPanel({ cx, cz, deckY, w, d, infillColor }: {
   );
 }
 
+const FOREX_PRINT_TEXTURES = new Map<string, THREE.Texture>();
+/** Druck-Textur je Data-URL einmal laden und wiederverwenden. */
+function forexPrintTexture(print: string): THREE.Texture {
+  let map = FOREX_PRINT_TEXTURES.get(print);
+  if (!map) {
+    map = new THREE.TextureLoader().load(print);
+    map.colorSpace = THREE.SRGBColorSpace;
+    map.anisotropy = 8;
+    FOREX_PRINT_TEXTURES.set(print, map);
+  }
+  return map;
+}
+
 /**
  * Forex-Blende direkt vor einer freien Kante: steht auf dem Boden der Ebene (baseY) und endet
- * 1 cm unter der Belag-Oberkante. Plan-Koordinaten (x, y) → Szene (x, z).
+ * 1 cm unter der Belag-Oberkante. Plan-Koordinaten (x, y) → Szene (x, z). Ein Druck liegt auf der
+ * Außenseite (lokales +z = Außennormale, wie in der Stadthallenplanung).
  */
-function ForexBlende({ forex, baseY, belagTopY, offsetX, offsetZ }: {
-  forex: PlacedForexPanel; baseY: number; belagTopY: number; offsetX: number; offsetZ: number;
+function ForexBlende({ forex, print, baseY, belagTopY, offsetX, offsetZ }: {
+  forex: PlacedForexPanel; print?: string; baseY: number; belagTopY: number; offsetX: number; offsetZ: number;
 }) {
   const { edge, thicknessMm } = forex;
   const t = thicknessMm / 1000;
   const h = belagTopY - FOREX_TOP_GAP_MM / 1000 - baseY;
+  const front = useMemo(
+    () => (print ? new THREE.MeshStandardMaterial({ color: '#ffffff', map: forexPrintTexture(print), roughness: 0.5 }) : null),
+    [print],
+  );
+  useEffect(() => () => front?.dispose(), [front]);
   if (h <= 0 || edge.lengthM <= 0) return null;
   const cx = (edge.x1 + edge.x2) / 2 + edge.nx * (t / 2) + offsetX;
   const cz = (edge.y1 + edge.y2) / 2 + edge.ny * (t / 2) + offsetZ;
-  const dx = (edge.x2 - edge.x1) / edge.lengthM;
-  const dz = (edge.y2 - edge.y1) / edge.lengthM;
+  // Box-Flächen: +x, -x, +y, -y, +z (außen, ggf. bedruckt), -z
+  const materials = front
+    ? [FOREX_MATERIAL, FOREX_MATERIAL, FOREX_MATERIAL, FOREX_MATERIAL, front, FOREX_MATERIAL]
+    : FOREX_MATERIAL;
   return (
-    <mesh position={[cx, baseY + h / 2, cz]} rotation={[0, Math.atan2(-dz, dx), 0]} material={FOREX_MATERIAL} castShadow receiveShadow>
+    <mesh position={[cx, baseY + h / 2, cz]} rotation={[0, Math.atan2(edge.nx, edge.ny), 0]} material={materials} castShadow receiveShadow>
       <boxGeometry args={[edge.lengthM, h, t]} />
     </mesh>
   );
@@ -382,6 +403,8 @@ export interface SceneTier {
   label?: string;
   /** Forex-Blenden an freien Außenkanten — Kanten in denselben Plan-Koordinaten wie `layout`. */
   forex?: PlacedForexPanel[];
+  /** Druckbilder je ForexPanel.id (verkleinerte JPEG-Data-URLs). */
+  forexPrints?: Record<string, string>;
 }
 
 interface Props {
@@ -588,6 +611,7 @@ export function AufbauScene3D({ tiers, onCanvasReady }: Props) {
                   <ForexBlende
                     key={fx.panel.id}
                     forex={fx}
+                    print={tier.forexPrints?.[fx.panel.id]}
                     baseY={baseY}
                     belagTopY={deckY + PANEL_THICKNESS_M - INFILL_RECESS_M}
                     offsetX={offsetX}

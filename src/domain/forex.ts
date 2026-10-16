@@ -139,13 +139,16 @@ export function toggleForexPanel(panels: ForexPanel[], pieceId: string, side: Fo
   return [...panels, { id: nextForexId(panels), pieceId, side }];
 }
 
-/** Schnellaktion „Alle Vorderkanten“: ergänzt eine Blende an jeder freien 'bottom'-Kante. */
+/** printGroup der Schnellaktion „Alle Vorderkanten“ — wie in der Stadthallenplanung: ein Druck über alle. */
+export const FRONT_PRINT_GROUP = 'vorne';
+
+/** Schnellaktion „Alle Vorderkanten“: ergänzt eine Blende an jeder freien 'bottom'-Kante (Druckgruppe „vorne“). */
 export function addAllFrontEdges(pieces: Piece2D[], panels: ForexPanel[]): ForexPanel[] {
   let next = panels;
   for (const edge of freeEdges(pieces)) {
     if (edge.side !== 'bottom') continue;
     if (next.some((p) => p.pieceId === edge.pieceId && p.side === 'bottom')) continue;
-    next = [...next, { id: nextForexId(next), pieceId: edge.pieceId, side: 'bottom' }];
+    next = [...next, { id: nextForexId(next), pieceId: edge.pieceId, side: 'bottom', printGroup: FRONT_PRINT_GROUP }];
   }
   return next;
 }
@@ -169,6 +172,65 @@ export function placeForexPanels(pieces: Piece2D[], panels: ForexPanel[]): Place
     out.push({ panel, edge, thicknessMm: panel.thicknessMm ?? DEFAULT_FOREX_THICKNESS_MM });
   }
   return out;
+}
+
+/**
+ * Reihenfolge links → rechts, wie man von außen auf die Blenden schaut — für einen Druck, der
+ * über mehrere Platten läuft. Gleiche Formel wie in der Stadthallenplanung.
+ */
+export function sortPanelsForPrint(placed: PlacedForexPanel[]): PlacedForexPanel[] {
+  const key = ({ edge: e }: PlacedForexPanel) => ((e.x1 + e.x2) / 2) * e.ny - ((e.y1 + e.y2) / 2) * e.nx;
+  return [...placed].sort((a, b) => key(a) - key(b));
+}
+
+export interface ForexPrintGroup {
+  /** printGroup, oder `#<id>` für eine Platte ohne Gruppe (eigener Druck). */
+  key: string;
+  printGroup?: string;
+  /** Platten in Druckreihenfolge (links → rechts von außen). */
+  panels: PlacedForexPanel[];
+  lengthM: number;
+}
+
+/** Platten mit gleicher printGroup bilden einen Druck, alle anderen je einen eigenen. */
+export function forexPrintGroups(placed: PlacedForexPanel[]): ForexPrintGroup[] {
+  const groups = new Map<string, PlacedForexPanel[]>();
+  for (const p of placed) {
+    const key = p.panel.printGroup ?? `#${p.panel.id}`;
+    groups.set(key, [...(groups.get(key) ?? []), p]);
+  }
+  return Array.from(groups.entries()).map(([key, panels]) => ({
+    key,
+    printGroup: panels[0].panel.printGroup,
+    panels: sortPanelsForPrint(panels),
+    lengthM: panels.reduce((s, p) => s + p.edge.lengthM, 0),
+  }));
+}
+
+/** Setzt (oder entfernt mit undefined) die Druckgruppe einer Blende. */
+export function setForexPrintGroup(panels: ForexPanel[], panelId: string, printGroup: string | undefined): ForexPanel[] {
+  return panels.map((p) => {
+    if (p.id !== panelId) return p;
+    const next: ForexPanel = { id: p.id, pieceId: p.pieceId, side: p.side };
+    if (p.thicknessMm !== undefined) next.thicknessMm = p.thicknessMm;
+    if (printGroup) next.printGroup = printGroup;
+    return next;
+  });
+}
+
+/** Nächster freier Gruppenname „druck-N“. */
+export function nextPrintGroupName(panels: ForexPanel[]): string {
+  const used = new Set(panels.map((p) => p.printGroup));
+  let n = 1;
+  while (used.has(`druck-${n}`)) n++;
+  return `druck-${n}`;
+}
+
+/** Drucke nur für Blenden behalten, die es noch gibt. */
+export function pruneForexPrints(prints: Record<string, string>, panels: ForexPanel[]): Record<string, string> {
+  const ids = new Set(panels.map((p) => p.id));
+  const entries = Object.entries(prints).filter(([id]) => ids.has(id));
+  return entries.length === Object.keys(prints).length ? prints : Object.fromEntries(entries);
 }
 
 /** Zuschnittmaß einer Blende in mm: Kantenlänge × (Belag-Oberkante − 1 cm). */

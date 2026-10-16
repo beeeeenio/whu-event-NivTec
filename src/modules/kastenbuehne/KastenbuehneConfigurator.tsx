@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AufbauScene3D } from '../../components/shared/AufbauScene3D';
 import { ExportButtons } from '../../components/shared/ExportButtons';
 import { FloorPlanSVG } from '../../components/shared/FloorPlanSVG';
@@ -16,9 +16,15 @@ import {
   addAllFrontEdges,
   appendMaterialItems,
   buildForexMaterialItems,
+  nextPrintGroupName,
   placeForexPanels,
+  pruneForexPrints,
+  setForexPrintGroup,
   toggleForexPanel,
+  type ForexPrintGroup,
 } from '../../domain/forex';
+import { loadForexPrints, saveForexPrints, type ForexPrints } from '../../lib/forexPrintStore';
+import { slicePrint } from '../../lib/printImage';
 import { STRUCTURE_RULES } from '../../domain/rules';
 import { parseKastenbuehneFile, type KastenbuehneSavedState } from '../../domain/savedState';
 import { formatMeters } from '../../lib/format';
@@ -50,6 +56,52 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
   const [forexPanels, setForexPanels] = useState<ForexPanel[]>([]);
   const placedForex = useMemo(() => placeForexPanels(normalizedPieces, forexPanels), [normalizedPieces, forexPanels]);
   const activeForexPanels = useMemo(() => placedForex.map((f) => f.panel), [placedForex]);
+
+  // Druckbilder je ForexPanel.id — nur lokal (IndexedDB), nie in der Plan-Datei.
+  const [forexPrints, setForexPrints] = useState<ForexPrints>({});
+  const printsLoadedRef = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    loadForexPrints('kastenbuehne').then((stored) => {
+      if (cancelled) return;
+      printsLoadedRef.current = true;
+      setForexPrints((prev) => ({ ...stored, ...prev }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (!printsLoadedRef.current) return;
+    void saveForexPrints('kastenbuehne', forexPrints);
+  }, [forexPrints]);
+  // Drucke entfernter Blenden fallen weg (Blenden an gerade belegten Kanten behalten ihren Druck).
+  const visiblePrints = useMemo(() => pruneForexPrints(forexPrints, forexPanels), [forexPrints, forexPanels]);
+
+  async function handleUploadPrint(group: ForexPrintGroup, file: File) {
+    const parts = await slicePrint(file, group.panels.map((p) => p.edge.lengthM));
+    setForexPrints((prev) => {
+      const next = { ...pruneForexPrints(prev, forexPanels) };
+      group.panels.forEach((p, i) => {
+        next[p.panel.id] = parts[i];
+      });
+      return next;
+    });
+  }
+
+  function handleRemovePrint(group: ForexPrintGroup) {
+    setForexPrints((prev) => {
+      const next = { ...prev };
+      for (const p of group.panels) delete next[p.panel.id];
+      return next;
+    });
+  }
+
+  function handleSetPrintGroup(panelId: string, printGroup: string | undefined) {
+    setForexPanels((prev) =>
+      setForexPrintGroup(prev, panelId, printGroup === '__new' ? nextPrintGroupName(prev) : printGroup),
+    );
+  }
 
   // Kastenbühne ist regeltechnisch eine ganz normale Bühne (gleiche Höhenserie,
   // Verstrebungs-/Geländerschwellen) — nur der Bauweg dahin ist ein anderer.
@@ -104,6 +156,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
                 discard();
                 layer.replace([]);
                 setForexPanels([]);
+                setForexPrints({});
                 setHeightCm(STRUCTURE_RULES.buehne.heightOptionsCm[0]);
               }}
               className="shrink-0 text-xs underline"
@@ -140,7 +193,12 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
           <ForexEdgeEditor
             pieces={normalizedPieces}
             forexPanels={activeForexPanels}
+            placed={placedForex}
+            prints={visiblePrints}
             onToggle={handleToggleForex}
+            onUploadPrint={handleUploadPrint}
+            onRemovePrint={handleRemovePrint}
+            onSetPrintGroup={handleSetPrintGroup}
             onAllFrontEdges={() => setForexPanels((prev) => addAllFrontEdges(normalizedPieces, prev))}
             onClear={() => setForexPanels([])}
           />
@@ -214,7 +272,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
               braucht die live WebGL-Canvas-Referenz, die beim Unmounten verloren ginge. */}
           <div className={resultTab === '3d' ? '' : 'hidden'}>
             <AufbauScene3D
-              tiers={[{ layout, feet: labeledFeet, heightM: heightCm / 100, forex: placedForex }]}
+              tiers={[{ layout, feet: labeledFeet, heightM: heightCm / 100, forex: placedForex, forexPrints: visiblePrints }]}
               onCanvasReady={onCanvasReady}
             />
           </div>
