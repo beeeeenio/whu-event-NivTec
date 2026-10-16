@@ -9,16 +9,20 @@ import {
   type Piece2D,
 } from '../../domain/customShape';
 import { checkGroupMove, duplicateWithOffset, rotateGroupAroundCenter, rotatePieceAroundCenter, snapGroupDelta } from '../../domain/pieceOps';
-import { alignmentGuides, nearestGaps, unionBounds, type AlignmentGuide, type GapMeasure, type Rect } from '../../domain/smartGuides';
+import { alignmentGuides, nearestGaps, unionBounds, type Rect } from '../../domain/smartGuides';
 import { isSondermassPiece, TRIANGLE_PANEL_SIZE_M } from '../../domain/panels';
 import { triangleHand } from '../../domain/triangle';
 import { mirrorPayload, payloadMatches, payloadSize, payloadToFilled, rotatePayload, type ToolPayload } from '../../domain/toolPayload';
 import { formatMeters } from '../../lib/format';
 import { dragThresholdPx, isPrimaryButton, shouldRotateOnWheel } from '../../lib/pointer';
 import { isEditableTarget, undoRedoAction } from '../../lib/shortcuts';
+import { CanvasGrid } from './editor/CanvasGrid';
+import { DragOverlay } from './editor/DragOverlay';
+import { EditorToolbar } from './editor/EditorToolbar';
 import { PiecePalette } from './editor/PiecePalette';
-import { DimensionLabel, PieceShape } from './editor/PieceShape';
+import { PieceShape } from './editor/PieceShape';
 import { ShortcutHelp } from './editor/ShortcutHelp';
+import type { DragState, PaletteDragState } from './editor/types';
 
 interface Props {
   pieces: Piece2D[];
@@ -82,151 +86,8 @@ function round1(v: number): number {
   return Math.round(v * 10) / 10;
 }
 
-const ACTION_BTN =
-  'px-2.5 py-1 rounded-md text-sm border border-[var(--color-panel-stroke)] bg-[var(--color-surface)] text-[var(--color-text)] cursor-pointer select-none enabled:hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed';
-
 const QUICK_WIDTHS = [2, 1.5, 1, 0.5] as const;
 
-/** Smart Guides beim Ziehen: Fluchtlinien, Abstandsmaße zu Nachbarn/Rand und das Gesamtmaß.
- *  Alles in Metern; Strichstärken und Schrift werden über px umgerechnet, damit sie bei jeder
- *  Zoomstufe gleich groß wirken. Reines Hinweis-Overlay (pointerEvents none). */
-function SmartGuidesLayer({
-  guides,
-  gaps,
-  total,
-  px,
-}: {
-  guides: AlignmentGuide[];
-  gaps: GapMeasure[];
-  total: Rect | null;
-  px: number;
-}) {
-  return (
-    <g pointerEvents="none">
-      {guides.map((g, i) =>
-        g.axis === 'x' ? (
-          <line
-            key={`guide-${i}`}
-            x1={g.pos}
-            x2={g.pos}
-            y1={g.from - 6 * px}
-            y2={g.to + 6 * px}
-            stroke="var(--color-accent)"
-            strokeWidth={px}
-            strokeDasharray={`${4 * px} ${3 * px}`}
-            opacity={g.kind === 'border' ? 0.6 : undefined}
-          />
-        ) : (
-          <line
-            key={`guide-${i}`}
-            y1={g.pos}
-            y2={g.pos}
-            x1={g.from - 6 * px}
-            x2={g.to + 6 * px}
-            stroke="var(--color-accent)"
-            strokeWidth={px}
-            strokeDasharray={`${4 * px} ${3 * px}`}
-            opacity={g.kind === 'border' ? 0.6 : undefined}
-          />
-        ),
-      )}
-      {gaps.map((g, i) => {
-        const mid = (g.from + g.to) / 2;
-        const label = `${formatMeters(g.lengthM, 2)} m`;
-        return g.axis === 'x' ? (
-          <g key={`gap-${i}`}>
-            <line x1={g.from} x2={g.to} y1={g.at} y2={g.at} stroke="var(--color-accent)" strokeWidth={px} />
-            <line x1={g.from} x2={g.from} y1={g.at - 4 * px} y2={g.at + 4 * px} stroke="var(--color-accent)" strokeWidth={px} />
-            <line x1={g.to} x2={g.to} y1={g.at - 4 * px} y2={g.at + 4 * px} stroke="var(--color-accent)" strokeWidth={px} />
-            <text
-              x={mid}
-              y={g.at - 4 * px}
-              fontSize={11 * px}
-              fill="var(--color-accent)"
-              fontFamily="var(--font-mono)"
-              stroke="var(--color-surface)"
-              strokeWidth={3 * px}
-              paintOrder="stroke"
-              textAnchor="middle"
-            >
-              {label}
-            </text>
-          </g>
-        ) : (
-          <g key={`gap-${i}`}>
-            <line x1={g.at} x2={g.at} y1={g.from} y2={g.to} stroke="var(--color-accent)" strokeWidth={px} />
-            <line x1={g.at - 4 * px} x2={g.at + 4 * px} y1={g.from} y2={g.from} stroke="var(--color-accent)" strokeWidth={px} />
-            <line x1={g.at - 4 * px} x2={g.at + 4 * px} y1={g.to} y2={g.to} stroke="var(--color-accent)" strokeWidth={px} />
-            <text
-              x={g.at + 4 * px}
-              y={mid}
-              fontSize={11 * px}
-              fill="var(--color-accent)"
-              fontFamily="var(--font-mono)"
-              stroke="var(--color-surface)"
-              strokeWidth={3 * px}
-              paintOrder="stroke"
-              textAnchor="middle"
-            >
-              {label}
-            </text>
-          </g>
-        );
-      })}
-      {total && (
-        <>
-          <rect
-            x={total.x}
-            y={total.y}
-            width={total.w}
-            height={total.d}
-            fill="none"
-            stroke="var(--color-accent)"
-            strokeWidth={px}
-            strokeDasharray={`${4 * px} ${3 * px}`}
-            opacity={0.45}
-          />
-          <text
-            x={total.x + total.w / 2}
-            y={total.y + total.d + 14 * px}
-            fontSize={11 * px}
-            fill="var(--color-accent)"
-            fontFamily="var(--font-mono)"
-            stroke="var(--color-surface)"
-            strokeWidth={3 * px}
-            paintOrder="stroke"
-            textAnchor="middle"
-          >
-            {`Gesamt ${formatMeters(total.w)} × ${formatMeters(total.d)} m`}
-          </text>
-        </>
-      )}
-    </g>
-  );
-}
-
-interface DragState {
-  id: string;
-  pointerType: string;
-  startClientX: number;
-  startClientY: number;
-  moved: boolean;
-  /** valid=false: Ziel würde ein anderes Stück überlappen (nur mit Alt, ungerastert möglich). */
-  target: { x: number; y: number; valid?: boolean } | null;
-  /** Greifpunkt minus Stück-Ursprung (Meter), damit das Stück nicht mit der Mitte an den Cursor springt. */
-  grabOffset: { x: number; y: number };
-  /** Nur bei gemeinsamem Verschieben mehrerer ausgewählter Stücke: Startpunkt (Meter) und Versatz. */
-  group?: { startX: number; startY: number; dx: number; dy: number; valid: boolean };
-}
-
-interface PaletteDragState {
-  payload: ToolPayload;
-  pointerType: string;
-  startClientX: number;
-  startClientY: number;
-  moved: boolean;
-  overCanvas: boolean;
-}
 
 export function PieceCanvasEditor({
   pieces,
@@ -836,6 +697,21 @@ export function PieceCanvasEditor({
     else onRedo?.();
   }
 
+  // Statuszeile der Toolbar: sagt, was gerade passiert bzw. was als Nächstes zu tun ist.
+  function statusText(): string {
+    return armed
+      ? 'Jetzt auf den Plan klicken, um das Stück zu platzieren.'
+      : selectedPiece
+        ? `Ausgewählt: ${formatMeters(selectedPiece.w, 2)}×${formatMeters(selectedPiece.d, 2)} m${
+            selectedPiece.corner !== undefined && selectedPiece.w !== selectedPiece.d
+              ? ` (${triangleHand(selectedPiece.corner, selectedPiece.w, selectedPiece.d)})`
+              : ''
+          }`
+        : selectedIds.length > 1
+          ? `${selectedIds.length} Stücke ausgewählt`
+          : 'Stück anklicken (Umschalt+Klick für mehrere) oder unten eins wählen.';
+  }
+
   // Nach jedem Commit die aktuellen Handler für die Palette aktualisieren (siehe paletteCallbacks);
   // vor jedem Ereignis ist der Ref damit aktuell, ohne während des Renders auf den Ref zuzugreifen.
   useLayoutEffect(() => {
@@ -843,99 +719,28 @@ export function PieceCanvasEditor({
   });
   return (
     <div className="space-y-3" onKeyDown={handleEditorKeyDown}>
-      <div
-        role="toolbar"
-        aria-label="Aktionen"
-        className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-2"
-      >
-        <span role="status" className="mr-1 text-xs text-[var(--color-text-muted)]">
-          {armed
-            ? 'Jetzt auf den Plan klicken, um das Stück zu platzieren.'
-            : selectedPiece
-              ? `Ausgewählt: ${formatMeters(selectedPiece.w, 2)}×${formatMeters(selectedPiece.d, 2)} m${
-                  selectedPiece.corner !== undefined && selectedPiece.w !== selectedPiece.d
-                    ? ` (${triangleHand(selectedPiece.corner, selectedPiece.w, selectedPiece.d)})`
-                    : ''
-                }`
-              : selectedIds.length > 1
-                ? `${selectedIds.length} Stücke ausgewählt`
-                : 'Stück anklicken (Umschalt+Klick für mehrere) oder unten eins wählen.'}
-        </span>
-        {onUndo && (
-          <button type="button" onClick={onUndo} disabled={!canUndo} title="Rückgängig (Strg/Cmd+Z)" aria-label="Rückgängig" className={ACTION_BTN}>
-            ↶
-          </button>
-        )}
-        {onRedo && (
-          <button type="button" onClick={onRedo} disabled={!canRedo} title="Wiederholen (Strg/Cmd+Umschalt+Z oder Strg+Y)" aria-label="Wiederholen" className={ACTION_BTN}>
-            ↷
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={rotateCurrent}
-          disabled={!armed && !selectedPiece && !(selectedIds.length > 1 && onReplaceAll)}
-          title="Drehen (R) — wirkt auf das gewählte oder gerade aufgenommene Stück"
-          className={ACTION_BTN}
-        >
-          ⤾ Drehen
-        </button>
-        <button type="button" onClick={duplicateSelected} disabled={selectedIds.length === 0} title="Duplizieren (Strg/Cmd+D)" className={ACTION_BTN}>⧉ Duplizieren</button>
-        {((armed?.kind === 'triangle' && armed.w !== armed.d) || (selectedPiece?.corner !== undefined && selectedPiece.w !== selectedPiece.d)) && (
-          <button type="button" onClick={mirrorCurrent} title="Spiegeln — wechselt links/rechts" className={ACTION_BTN}>
-            ⇋ Spiegeln
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={removeSelected}
-          disabled={selectedIds.length === 0}
-          title="Entfernen (Entf)"
-          className={`${ACTION_BTN} enabled:hover:!border-[var(--color-danger)] enabled:hover:!text-[var(--color-danger)]`}
-        >
-          {selectedIds.length > 1 ? `Entfernen (${selectedIds.length})` : 'Entfernen'}
-        </button>
-        {(armed || selectedIds.length > 0) && (
-          <button
-            type="button"
-            onClick={() => (armed ? arm(null) : setSelectedIds([]))}
-            className="px-2 py-1 text-xs text-[var(--color-text-muted)] underline"
-          >
-            {armed ? 'Abbrechen' : 'Abwählen'}
-          </button>
-        )}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          {pieces.length > 0 && (
-            <div className="flex items-center gap-1.5" role="group" aria-label="Ganze Fläche verschieben">
-              <span className="text-xs text-[var(--color-text-muted)]">Alles verschieben</span>
-              <button
-                type="button"
-                onClick={() => shiftAll(-GRID_STEP_M)}
-                disabled={!canShiftLeft}
-                title={canShiftLeft ? 'Alle Stücke gemeinsam 0,5 m nach links (Umschalt+← ohne Auswahl)' : 'Die Fläche liegt schon am linken Rand'}
-                aria-label="Alle Stücke 0,5 m nach links verschieben"
-                className={ACTION_BTN}
-              >
-                ←
-              </button>
-              <button
-                type="button"
-                onClick={() => shiftAll(GRID_STEP_M)}
-                title="Alle Stücke gemeinsam 0,5 m nach rechts (Umschalt+→ ohne Auswahl)"
-                aria-label="Alle Stücke 0,5 m nach rechts verschieben"
-                className={ACTION_BTN}
-              >
-                →
-              </button>
-            </div>
-          )}
-          {onClear && pieces.length > 0 && (
-            <button type="button" onClick={onClear} title="Leert den ganzen Plan" className={`${ACTION_BTN} enabled:hover:!border-[var(--color-danger)] enabled:hover:!text-[var(--color-danger)]`}>
-              Zurücksetzen
-            </button>
-          )}
-        </div>
-      </div>
+      <EditorToolbar
+        statusText={statusText()}
+        onUndo={onUndo}
+        onRedo={onRedo}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        canRotate={!!armed || !!selectedPiece || (selectedIds.length > 1 && !!onReplaceAll)}
+        onRotate={rotateCurrent}
+        canDuplicate={selectedIds.length > 0}
+        onDuplicate={duplicateSelected}
+        showMirror={(armed?.kind === 'triangle' && armed.w !== armed.d) || (selectedPiece?.corner !== undefined && selectedPiece.w !== selectedPiece.d)}
+        onMirror={mirrorCurrent}
+        removeCount={selectedIds.length}
+        onRemove={removeSelected}
+        cancelLabel={armed ? 'Abbrechen' : selectedIds.length > 0 ? 'Abwählen' : null}
+        onCancel={() => (armed ? arm(null) : setSelectedIds([]))}
+        piecesCount={pieces.length}
+        canShiftLeft={canShiftLeft}
+        onShiftAll={shiftAll}
+        shiftStepM={GRID_STEP_M}
+        onClear={onClear}
+      />
       {blockedMessage && (
         <div role="status" className="rounded-md border border-[var(--color-danger)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-danger)]">
           {blockedMessage}
@@ -952,46 +757,14 @@ export function PieceCanvasEditor({
         tabIndex={0}
         onKeyDown={handleCanvasKeyDown}
       >
-        <defs>
-          <pattern id={`pce-hatch-${uid}`} width={0.14} height={0.14} patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-            <rect width={0.14} height={0.14} fill="var(--color-panel-fill)" />
-            <line x1={0} y1={0} x2={0} y2={0.14} stroke="var(--color-panel-hatch)" strokeWidth={0.02} opacity={0.32} />
-          </pattern>
-          <pattern id={`pce-hatch-warning-${uid}`} width={0.14} height={0.14} patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-            <rect width={0.14} height={0.14} fill="var(--color-panel-fill)" />
-            <line x1={0} y1={0} x2={0} y2={0.14} stroke="var(--color-panel-hatch-warning)" strokeWidth={0.022} opacity={0.42} />
-          </pattern>
-          <pattern id={`pce-dotgrid-${uid}`} width={GRID_STEP_M} height={GRID_STEP_M} patternUnits="userSpaceOnUse">
-            <circle cx={GRID_STEP_M / 2} cy={GRID_STEP_M / 2} r={0.012} fill="var(--color-grid-line)" />
-          </pattern>
-        </defs>
-
-        <rect
-          x={-PAD}
-          y={-PAD}
-          width={canvasWidthM + PAD * 2}
-          height={canvasDepthM + PAD * 2}
-          fill={`url(#pce-dotgrid-${uid})`}
-          pointerEvents="none"
+        <CanvasGrid
+          uid={uid}
+          canvasWidthM={canvasWidthM}
+          canvasDepthM={canvasDepthM}
+          frontEdgeLabel={frontEdgeLabel}
+          gridStepM={GRID_STEP_M}
+          pad={PAD}
         />
-        {Array.from({ length: Math.floor(canvasWidthM) + 1 }, (_, i) => (
-          <line key={`vmaj-${i}`} x1={i} y1={0} x2={i} y2={canvasDepthM} stroke="var(--color-grid-line-major)" strokeWidth={0.01} pointerEvents="none" />
-        ))}
-        {Array.from({ length: Math.floor(canvasDepthM) + 1 }, (_, i) => (
-          <line key={`hmaj-${i}`} x1={0} y1={i} x2={canvasWidthM} y2={i} stroke="var(--color-grid-line-major)" strokeWidth={0.01} pointerEvents="none" />
-        ))}
-
-        <line x1={0} y1={0} x2={canvasWidthM} y2={0} stroke="var(--color-panel-stroke)" strokeWidth={0.04} />
-        <text
-          x={canvasWidthM / 2}
-          y={-0.18}
-          fontSize={0.22}
-          textAnchor="middle"
-          fill="var(--color-text-muted)"
-          fontFamily="var(--font-display)"
-        >
-          {frontEdgeLabel}
-        </text>
 
         <rect
           x={0}
@@ -1085,62 +858,16 @@ export function PieceCanvasEditor({
           );
         })}
 
-        {drag?.group &&
-          drag.moved &&
-          pieces
-            .filter((p) => selectedIds.includes(p.id))
-            .map((p) => (
-              <PieceShape
-                key={`ghost-${p.id}`}
-                piece={{ ...p, x: p.x + drag.group!.dx, y: p.y + drag.group!.dy }}
-                fill={drag.group!.valid ? 'var(--color-accent)' : 'var(--color-danger)'}
-                fillOpacity={drag.group!.valid ? 0.35 : 0.2}
-                stroke={drag.group!.valid ? 'var(--color-accent)' : 'var(--color-danger)'}
-                strokeWidth={0.03}
-                strokeDasharray={drag.group!.valid ? undefined : '0.08 0.06'}
-                style={{ pointerEvents: 'none' }}
-              />
-            ))}
-        {drag?.target &&
-          (() => {
-            const dragged = pieces.find((p) => p.id === drag.id);
-            const w = dragged?.w ?? 0;
-            const d = dragged?.d ?? 0;
-            return (
-              <>
-                <PieceShape
-                  piece={{ x: drag.target.x, y: drag.target.y, w, d, corner: dragged?.corner, shape: dragged?.shape }}
-                  fill={drag.target.valid === false ? 'var(--color-danger)' : 'var(--color-accent)'}
-                  fillOpacity={drag.target.valid === false ? 0.2 : 0.35}
-                  stroke={drag.target.valid === false ? 'var(--color-danger)' : 'var(--color-accent)'}
-                  strokeWidth={0.03}
-                  strokeDasharray={drag.target.valid === false ? '0.08 0.06' : undefined}
-                  style={{ pointerEvents: 'none' }}
-                />
-                <DimensionLabel x={drag.target.x} y={drag.target.y} w={w} d={d} />
-              </>
-            );
-          })()}
-
-        {previewPieces?.map((p, idx) => (
-          <PieceShape
-            key={idx}
-            piece={p}
-            fill={p.valid === false ? 'var(--color-danger)' : 'var(--color-accent)'}
-            fillOpacity={p.valid === false ? 0.2 : 0.35}
-            stroke={p.valid === false ? 'var(--color-danger)' : 'var(--color-accent)'}
-            strokeWidth={0.03}
-            strokeDasharray={p.valid === false ? '0.08 0.06' : undefined}
-            style={{ pointerEvents: 'none' }}
-          />
-        ))}
-        {previewPieces?.length === 1 && (
-          <DimensionLabel x={previewPieces[0].x} y={previewPieces[0].y} w={previewPieces[0].w} d={previewPieces[0].d} />
-        )}
-
-        {liveGeometry && (
-          <SmartGuidesLayer guides={liveGeometry.guides} gaps={liveGeometry.gaps} total={liveGeometry.total} px={liveGeometry.px} />
-        )}
+        <DragOverlay
+          pieces={pieces}
+          selectedIds={selectedIds}
+          drag={drag}
+          previewPieces={previewPieces}
+          guides={liveGeometry?.guides ?? []}
+          gaps={liveGeometry?.gaps ?? []}
+          total={liveGeometry?.total ?? null}
+          px={metersPerPx}
+        />
       </svg>
 
       <PiecePalette armed={armed} hint="Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil. Beim Ziehen zeigen Hilfslinien Fluchten, Abstände und das Gesamtmaß in m. Alt gedrückt halten: frei platzieren, ohne Einrasten." {...paletteCallbacks} />
