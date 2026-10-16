@@ -16,7 +16,7 @@ export function SelectionActionBar({ left, top, actions }: { left: number; top: 
     <div
       role="toolbar"
       aria-label="Aktionen für die Auswahl"
-      className="absolute z-10 flex gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-1 shadow-md"
+      className="absolute z-10 flex flex-wrap gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-1 shadow-md"
       style={{ left, top }}
     >
       {actions.map((a) => (

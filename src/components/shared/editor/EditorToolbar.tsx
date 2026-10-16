@@ -23,6 +23,9 @@ interface EditorToolbarProps {
   onClear?: () => void;
   /** Platz für weitere Schalter (Zoom, Maße, Sperren …) vor der rechten Gruppe. */
   extra?: React.ReactNode;
+  /** Mehrfachauswahl per Antippen (Touch ohne Umschalttaste); ohne onToggleMultiSelect gibt es keinen Schalter. */
+  multiSelect?: boolean;
+  onToggleMultiSelect?: () => void;
 }
 
 /** Aktionsleiste über dem Plan: Statustext, Rückgängig/Wiederholen, Drehen, Duplizieren, Spiegeln,
@@ -50,6 +53,8 @@ export function EditorToolbar({
   shiftStepM,
   onClear,
   extra,
+  multiSelect,
+  onToggleMultiSelect,
 }: EditorToolbarProps) {
   return (
     <div
@@ -94,6 +99,17 @@ export function EditorToolbar({
       >
         {removeCount > 1 ? `Entfernen (${removeCount})` : 'Entfernen'}
       </button>
+      {onToggleMultiSelect && (
+        <button
+          type="button"
+          onClick={onToggleMultiSelect}
+          aria-pressed={!!multiSelect}
+          title="Tippen fügt Stücke zur Auswahl hinzu bzw. entfernt sie – für Touch"
+          className={`${ACTION_BTN} ${multiSelect ? '!border-[var(--color-accent)] !text-[var(--color-accent)]' : ''}`}
+        >
+          Mehrfachauswahl
+        </button>
+      )}
       {cancelLabel && (
         <button type="button" onClick={onCancel} className="px-2 py-1 text-xs text-[var(--color-text-muted)] underline">
           {cancelLabel}

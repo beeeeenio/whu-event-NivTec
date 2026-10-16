@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { addFilledPieces, checkGroupMove, duplicateWithOffset, movePieceTo, movePiecesBy, piecesInRect, removePieceById, removePiecesByIds, rotateGroupAroundCenter, rotatePieceAroundCenter, rotatePieceById, snapGroupDelta } from '../pieceOps';
+import { addFilledPieces, checkGroupMove, duplicateWithOffset, moveGroupTo, movePieceTo, movePiecesBy, piecesInRect, removePieceById, removePiecesByIds, rotateGroupAroundCenter, rotatePieceAroundCenter, rotatePieceById, snapGroupDelta } from '../pieceOps';
 import { fitsAt, type Piece2D } from '../customShape';
 
 describe('pieceOps', () => {
@@ -441,6 +441,48 @@ describe('Kanten-Snapping und Drehen um den Mittelpunkt', () => {
       expect(piecesInRect(grid, { x: 0.5, y: 0.5, w: 0, d: 0.5 })).toEqual([]);
       expect(piecesInRect(grid, { x: 0.5, y: 0.5, w: 1, d: 0 }, 'contain')).toEqual([]);
       expect(piecesInRect([], { x: 0, y: 0, w: 5, d: 5 })).toEqual([]);
+    });
+  });
+
+  describe('moveGroupTo', () => {
+    // Auswahl a (1..3 / 1..2) und c (3..4 / 3..4); b steht weit weg bei (5,5).
+    const a: Piece2D = { id: 'a', x: 1, y: 1, w: 2, d: 1 };
+    const c: Piece2D = { id: 'c', x: 3, y: 3, w: 1, d: 1 };
+    const b: Piece2D = { id: 'b', x: 5, y: 5, w: 1, d: 1 };
+
+    it('rundet das Ziel aufs Raster (1,3 → 1,5)', () => {
+      const r = moveGroupTo([a], ['a'], 1.3, 2.2);
+      expect(r.dx).toBe(0.5);
+      expect(r.dy).toBe(1);
+      expect(r.result).toBe('ok');
+    });
+
+    it('klemmt negative Ziele auf 0', () => {
+      const r = moveGroupTo([a], ['a'], -2, -3);
+      expect(r.dx).toBe(-1);
+      expect(r.dy).toBe(-1);
+      expect(r.result).toBe('ok');
+    });
+
+    it('meldet collision bei Überlappung mit einem anderen Stück', () => {
+      // Ziel (4.5, 5): a läge bei x 4.5..6.5, y 5..6 und überlappt b (5..6, 5..6).
+      const r = moveGroupTo([a, b], ['a'], 4.5, 5);
+      expect(r.result).toBe('collision');
+    });
+
+    it('meldet ok an einer freien Stelle', () => {
+      const r = moveGroupTo([a, b], ['a'], 0, 0);
+      expect(r.result).toBe('ok');
+    });
+
+    it('rechnet relativ zur Bounding-Box der Auswahl', () => {
+      // Bounding-Box von a und c beginnt bei (1, 1); Ziel (2, 4) setzt die linke obere Ecke dorthin.
+      const r = moveGroupTo([a, c], ['a', 'c'], 2, 4);
+      expect(r).toEqual({ dx: 1, dy: 3, result: 'ok' });
+    });
+
+    it('liefert ohne Auswahl einen Nullversatz', () => {
+      expect(moveGroupTo([a, b], [], 2, 2)).toEqual({ dx: 0, dy: 0, result: 'ok' });
     });
   });
 });

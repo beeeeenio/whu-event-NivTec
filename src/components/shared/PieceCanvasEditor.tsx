@@ -10,7 +10,7 @@ import {
   type PlacementOptions,
   type Piece2D,
 } from '../../domain/customShape';
-import { checkGroupMove, duplicateWithOffset, piecesInRect, rotateGroupAroundCenter, rotatePieceAroundCenter, snapGroupDelta } from '../../domain/pieceOps';
+import { checkGroupMove, duplicateWithOffset, moveGroupTo, piecesInRect, rotateGroupAroundCenter, rotatePieceAroundCenter, snapGroupDelta, type GroupMoveCheck } from '../../domain/pieceOps';
 import {
   getMemoryClipboard,
   makeClipboardPayload,
@@ -29,6 +29,7 @@ import { dragThresholdPx, isPrimaryButton, shouldRotateOnWheel, wheelIntent } fr
 import { createFrameThrottle } from '../../lib/pointerDrag';
 import { panBy, pinchFactor, touchGestureIntent, viewBoxToString, zoomAt, zoomLevel, type ViewBox } from '../../lib/viewport';
 import { editorShortcut, isEditableTarget } from '../../lib/shortcuts';
+import { ACTION_BTN } from './editor/styles';
 import { CanvasGrid } from './editor/CanvasGrid';
 import { DragOverlay } from './editor/DragOverlay';
 import { EditorToolbar } from './editor/EditorToolbar';
@@ -192,6 +193,10 @@ export function PieceCanvasEditor({
   // Alt gedrückt beim Platzieren: freie Lage ohne Einrasten, Überlappung wird rot angezeigt.
   const [altHeld, setAltHeld] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Verschieben-Modus (Touch/Tastatur ohne Ziehen): danach wird das Ziel auf dem Plan angetippt.
+  const [moveMode, setMoveMode] = useState(false);
+  // Mehrfachauswahl per Antippen (Touch ohne Umschalttaste): Tippen fügt Stücke hinzu bzw. entfernt sie.
+  const [multiSelect, setMultiSelect] = useState(false);
   // Undo/Redo oder Import können ausgewählte Stücke entfernen: IDs ohne Stück nicht festhalten.
   // Beim Wechsel der Stückliste direkt im Render nachziehen (kein Effekt, damit kein Zwischen-Render mit Geister-Auswahl entsteht).
   const [selectionPiecesRef, setSelectionPiecesRef] = useState(pieces);
@@ -199,6 +204,8 @@ export function PieceCanvasEditor({
     setSelectionPiecesRef(pieces);
     setSelectedIds((cur) => pruneSelection(cur, pieces));
   }
+  // Ohne Auswahl gibt es nichts zu verschieben: der Verschieben-Modus endet mit der Auswahl.
+  if (moveMode && selectedIds.length === 0) setMoveMode(false);
   // Einzelauswahl (Drehen/Spiegeln/Pfeiltasten) gilt nur bei genau einem ausgewählten Stück;
   // mit Umschalt+Klick lassen sich mehrere auswählen, die dann gemeinsam gelöscht werden.
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
@@ -264,6 +271,7 @@ export function PieceCanvasEditor({
     setArmedState(payload);
     setSelectedId(null);
     setPointerPos(null);
+    setMoveMode(false);
   }
 
   // Ein laufender Timer wird vor jedem neuen Hinweis verworfen, damit die zweite Meldung
@@ -649,10 +657,15 @@ export function PieceCanvasEditor({
   // Der Greif-Offset bleibt erhalten: das Stück springt nicht mit der Mitte an den Cursor.
   const pieceDrag = usePointerDrag<Piece2D>({
     onStart: (e, piece) => {
-      if (armed) return false;
+      if (armed || moveMode) return false;
       e.stopPropagation();
       if (e.shiftKey) {
         setSelectedIds((cur) => (cur.includes(piece.id) ? cur.filter((id) => id !== piece.id) : [...cur, piece.id]));
+        return false;
+      }
+      // Mehrfachauswahl (Touch): ein noch nicht ausgewähltes Stück kommt nur dazu, es wird nicht gezogen.
+      if (multiSelect && !selectedIds.includes(piece.id)) {
+        setSelectedIds((cur) => [...cur, piece.id]);
         return false;
       }
       const inGroup = selectedIds.length > 1 && selectedIds.includes(piece.id);
@@ -711,6 +724,11 @@ export function PieceCanvasEditor({
       dragRef.current = null;
       setFrozenBase(null);
       if (!cur) return;
+      // Mehrfachauswahl: ein Tippen ohne Bewegung nimmt das Stück wieder aus der Auswahl.
+      if (!cur.moved && multiSelect) {
+        setSelectedIds((c) => c.filter((id) => id !== piece.id));
+        return;
+      }
       if (cur.group) {
         const { dx, dy, valid } = cur.group;
         if (cur.moved && valid && (dx !== 0 || dy !== 0)) {
@@ -857,7 +875,8 @@ export function PieceCanvasEditor({
     const intent = touchGestureIntent({
       touchCount: touchPointsRef.current.size,
       onPiece,
-      armed: !!armed,
+      // Im Verschieben-Modus wirkt Antippen wie beim bewaffneten Werkzeug: kein Scrollen, Tap ist das Ziel.
+      armed: !!armed || moveMode,
       zoomed: view !== null,
     });
     if (intent === 'pinch') {
@@ -1043,19 +1062,53 @@ export function PieceCanvasEditor({
     const dx = round1(ux * step);
     const dy = round1(uy * step);
     const result = checkGroupMove(pieces, selectedIds, dx, dy);
-    if (result === 'out-of-bounds') {
-      showBlockedMessage('Weiter geht es nicht – der Plan beginnt hier.');
+    if (result !== 'ok') {
+      showBlockedMessage(groupBlockedText(result));
       return;
     }
-    if (result === 'collision') {
-      showBlockedMessage('Dort ist kein Platz – ein anderes Stück liegt im Weg.');
-      return;
-    }
+    moveSelectionBy(dx, dy);
+  }
+
+  // Blockade-Meldung für eine nicht mögliche Gruppenbewegung (Pfeil-Buttons, Ziel antippen).
+  function groupBlockedText(result: GroupMoveCheck): string {
+    return result === 'out-of-bounds' ? 'Weiter geht es nicht – der Plan beginnt hier.' : 'Dort ist kein Platz – ein anderes Stück liegt im Weg.';
+  }
+
+  // Verschiebt die ganze Auswahl um (dx, dy) als ein Undo-Schritt.
+  function moveSelectionBy(dx: number, dy: number) {
     if (onMovePieces) {
       onMovePieces(selectedIds, dx, dy);
       return;
     }
     batch(() => pieces.filter((p) => selectedIds.includes(p.id)).forEach((p) => onMovePiece(p.id, round1(p.x + dx), round1(p.y + dy))));
+  }
+
+  // Verschieben ohne Ziehen: "Verschieben" antippen, dann Ziel auf dem Plan antippen (Esc bricht ab).
+  function startMoveMode() {
+    if (selectedIds.length === 0) return;
+    setMoveMode(true);
+    svgRef.current?.focus({ preventScroll: true });
+  }
+
+  // Zielpunkt im Verschieben-Modus: ein Stück bekommt eine freie Stelle nahe dem Ziel, eine Auswahl
+  // wird mit ihrer linken oberen Ecke aufs Raster dorthin gesetzt. Blockaden werden gemeldet.
+  function handleMoveTarget(clientX: number, clientY: number) {
+    setMoveMode(false);
+    if (selectedIds.length === 0) return;
+    const p = svgPointFromClient(clientX, clientY);
+    if (selectedIds.length === 1) {
+      const piece = pieces.find((q) => q.id === selectedIds[0]);
+      if (!piece) return;
+      const pos = findFreePosition(pieces, piece.w, piece.d, p.x, p.y, piece.id, placementOptions());
+      if (pos.x !== piece.x || pos.y !== piece.y) onMovePiece(piece.id, pos.x, pos.y);
+      return;
+    }
+    const { dx, dy, result } = moveGroupTo(pieces, selectedIds, p.x, p.y, GRID_STEP_M);
+    if (result !== 'ok') {
+      showBlockedMessage(groupBlockedText(result));
+      return;
+    }
+    if (dx !== 0 || dy !== 0) moveSelectionBy(dx, dy);
   }
 
   // Tastatur-Bedienung des Plans, nur aktiv wenn das SVG fokussiert ist (Klick oder Tab hinein) —
@@ -1071,6 +1124,11 @@ export function PieceCanvasEditor({
     if (e.key === 'Escape') {
       pieceDrag.cancel();
       setPaletteDrag(null);
+      // Im Verschieben-Modus bricht Esc nur das Verschieben ab; die Auswahl bleibt.
+      if (moveMode) {
+        setMoveMode(false);
+        return;
+      }
       arm(null);
       return;
     }
@@ -1221,7 +1279,9 @@ export function PieceCanvasEditor({
 
   // Statuszeile der Toolbar: sagt, was gerade passiert bzw. was als Nächstes zu tun ist.
   function statusText(): string {
-    return armed
+    return moveMode
+      ? 'Ziel antippen – die Auswahl wird mit ihrer linken oberen Ecke dorthin gesetzt. Esc bricht ab.'
+      : armed
       ? 'Jetzt auf den Plan klicken, um das Stück zu platzieren.'
       : selectedPiece
         ? `Ausgewählt: ${formatMeters(selectedPiece.w, 2)}×${formatMeters(selectedPiece.d, 2)} m${
@@ -1231,7 +1291,9 @@ export function PieceCanvasEditor({
           }`
         : selectedIds.length > 1
           ? `${selectedIds.length} Stücke ausgewählt`
-          : 'Stück anklicken (Umschalt+Klick für mehrere) oder unten eins wählen.';
+          : multiSelect
+            ? 'Stücke antippen, um sie zur Auswahl hinzuzufügen oder wieder zu entfernen.'
+            : 'Stück anklicken (Umschalt+Klick für mehrere) oder unten eins wählen.';
   }
 
   // Rahmen der Aufziehen-Geste, normalisiert (oben links); erst ab einer echten Bewegung sichtbar.
@@ -1249,13 +1311,18 @@ export function PieceCanvasEditor({
   const selectionBounds = selectedRects.length > 1 ? unionBounds(selectedRects) : null;
 
   // Schwebende Aktionsleiste: nur bei Auswahl und ohne laufendes Ziehen, Werkzeug oder Rahmen.
-  const barVisible = selectedIds.length > 0 && !drag?.moved && !armed && !paletteDrag && !marquee;
+  const barVisible = selectedIds.length > 0 && !drag?.moved && !armed && !moveMode && !paletteDrag && !marquee;
   const showMirrorSelected = selectedPiece?.corner !== undefined && selectedPiece.w !== selectedPiece.d;
   const canRotateSelection = !!selectedPiece || (selectedIds.length > 1 && !!onReplaceAll);
   const barActions: SelectionAction[] = [
     { key: 'rotate', label: '⤾ Drehen', ariaLabel: 'Auswahl drehen', onClick: rotateCurrent, disabled: !canRotateSelection },
     { key: 'duplicate', label: 'Duplizieren', ariaLabel: 'Auswahl duplizieren', onClick: duplicateSelected },
     ...(showMirrorSelected && onMirrorPiece ? [{ key: 'mirror', label: '⇋ Spiegeln', ariaLabel: 'Stück spiegeln', onClick: mirrorCurrent }] : []),
+    { key: 'move', label: 'Verschieben', ariaLabel: 'Auswahl verschieben: danach Ziel auf dem Plan antippen', onClick: startMoveMode },
+    { key: 'left', label: '←', ariaLabel: 'Auswahl 0,5 m nach links', onClick: () => nudgeSelection(-1, 0, GRID_STEP_M) },
+    { key: 'up', label: '↑', ariaLabel: 'Auswahl 0,5 m nach oben', onClick: () => nudgeSelection(0, -1, GRID_STEP_M) },
+    { key: 'down', label: '↓', ariaLabel: 'Auswahl 0,5 m nach unten', onClick: () => nudgeSelection(0, 1, GRID_STEP_M) },
+    { key: 'right', label: '→', ariaLabel: 'Auswahl 0,5 m nach rechts', onClick: () => nudgeSelection(1, 0, GRID_STEP_M) },
     { key: 'remove', label: 'Entfernen', ariaLabel: 'Auswahl entfernen', danger: true, onClick: removeSelected },
   ];
   // Bei Touch-Ziehen erscheint ein Drehen-Button, den ein zweiter Finger antippt (Stück bzw. Palette-Kachel).
@@ -1310,13 +1377,22 @@ export function PieceCanvasEditor({
         onShiftAll={shiftAll}
         shiftStepM={GRID_STEP_M}
         onClear={onClear ? handleClear : undefined}
+        multiSelect={multiSelect}
+        onToggleMultiSelect={() => setMultiSelect((v) => !v)}
         extra={
-          <ZoomControls
-            zoomPercent={zoomPercent}
-            onZoomIn={() => zoomByButton(1.25)}
-            onZoomOut={() => zoomByButton(1 / 1.25)}
-            onFit={() => setView(null)}
-          />
+          <>
+            {moveMode && (
+              <button type="button" onClick={() => setMoveMode(false)} className={ACTION_BTN}>
+                Verschieben abbrechen
+              </button>
+            )}
+            <ZoomControls
+              zoomPercent={zoomPercent}
+              onZoomIn={() => zoomByButton(1.25)}
+              onZoomOut={() => zoomByButton(1 / 1.25)}
+              onFit={() => setView(null)}
+            />
+          </>
         }
       />
       {blockedMessage && (
@@ -1547,6 +1623,20 @@ export function PieceCanvasEditor({
           total={liveGeometry?.total ?? null}
           px={metersPerPx}
         />
+
+        {/* Verschieben-Modus: Ziel antippen. Liegt über den Stücken, damit das Antippen das Ziel trifft und nicht das Stück. */}
+        {moveMode && (
+          <rect
+            x={0}
+            y={0}
+            width={canvasWidthM}
+            height={canvasDepthM}
+            fill="transparent"
+            pointerEvents="all"
+            onClick={(e) => handleMoveTarget(e.clientX, e.clientY)}
+            style={{ cursor: 'crosshair' }}
+          />
+        )}
       </svg>
       {barVisible && barShown && <SelectionActionBar left={barShown.left} top={barShown.top} actions={barActions} />}
       {touchRotating && (

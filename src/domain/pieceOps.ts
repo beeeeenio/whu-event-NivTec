@@ -62,6 +62,23 @@ export function checkGroupMove(pieces: Piece2D[], ids: readonly string[], dx: nu
 }
 
 /**
+ * Versatz, um die Auswahl mit der linken oberen Ecke ihrer Bounding-Box auf (targetX, targetY) zu setzen (aufs Raster gerundet, nicht negativ), samt Prüfergebnis.
+ * Dient dem Verschieben ohne Ziehen (Ziel antippen): der Versatz ist relativ zur Bounding-Box der Auswahl.
+ */
+export function moveGroupTo(pieces: Piece2D[], ids: readonly string[], targetX: number, targetY: number, gridM = 0.5): { dx: number; dy: number; result: GroupMoveCheck } {
+  const set = new Set(ids);
+  const moving = pieces.filter((p) => set.has(p.id));
+  if (moving.length === 0) return { dx: 0, dy: 0, result: 'ok' };
+  const minX = Math.min(...moving.map((p) => p.x));
+  const minY = Math.min(...moving.map((p) => p.y));
+  const tx = Math.max(0, Math.round(targetX / gridM) * gridM);
+  const ty = Math.max(0, Math.round(targetY / gridM) * gridM);
+  const dx = r3(tx - minX);
+  const dy = r3(ty - minY);
+  return { dx, dy, result: checkGroupMove(pieces, ids, dx, dy) };
+}
+
+/**
  * Removes all pieces whose IDs are in `ids` in one step.
  * Returns a new array. Returns the SAME array reference if none of the IDs was found.
  */
