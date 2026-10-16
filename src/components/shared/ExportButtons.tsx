@@ -5,6 +5,7 @@ import { materialListToCsv } from '../../lib/csv';
 import { downloadTextFile } from '../../lib/download';
 import { exportCanvasAsPng } from '../../lib/canvasExport';
 import { exportLayoutAsPptx, exportSectionsAsPptx, type PptxSection } from '../../lib/pptxExport';
+import { ScaledPlanExport } from './ScaledPlanExport';
 
 export interface PptxExportData {
   sections: PptxSection[];
@@ -59,7 +60,7 @@ export function ExportButtons({ materialList, getCanvas, filenamePrefix, pptx }:
 
   return (
     <div className="space-y-1">
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <button
           type="button"
           onClick={handleCsvExport}
@@ -84,6 +85,7 @@ export function ExportButtons({ materialList, getCanvas, filenamePrefix, pptx }:
           </button>
         )}
       </div>
+      {pptx && <ScaledPlanExport sections={pptx.sections} title={pptx.title} filenamePrefix={filenamePrefix} />}
       {exportError && <p className="text-xs text-[var(--color-danger)]">{exportError}</p>}
     </div>
   );
