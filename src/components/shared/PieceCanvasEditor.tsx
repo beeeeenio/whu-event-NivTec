@@ -133,6 +133,8 @@ function PieceShape({
   onPointerDown,
   onPointerMove,
   onPointerUp,
+  onPointerCancel,
+  onLostPointerCapture,
   children,
 }: {
   piece: ShapeGeometry;
@@ -145,9 +147,23 @@ function PieceShape({
   onPointerDown?: (e: React.PointerEvent<SVGElement>) => void;
   onPointerMove?: (e: React.PointerEvent<SVGElement>) => void;
   onPointerUp?: (e: React.PointerEvent<SVGElement>) => void;
+  onPointerCancel?: (e: React.PointerEvent<SVGElement>) => void;
+  onLostPointerCapture?: (e: React.PointerEvent<SVGElement>) => void;
   children?: React.ReactNode;
 }) {
-  const shared = { fill, fillOpacity, stroke, strokeWidth, pointerEvents, style, onPointerDown, onPointerMove, onPointerUp };
+  const shared = {
+    fill,
+    fillOpacity,
+    stroke,
+    strokeWidth,
+    pointerEvents,
+    style,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerCancel,
+    onLostPointerCapture,
+  };
   if (piece.corner === undefined) {
     return (
       <rect x={piece.x} y={piece.y} width={piece.w} height={piece.d} {...shared}>
@@ -382,6 +398,15 @@ export function PieceCanvasEditor({
   useEffect(() => {
     if (!dragging) return;
     const onKey = (e: KeyboardEvent) => {
+      // Esc bricht das Paletten-Ziehen ab. suppressNextClickRef verhindert, dass der danach
+      // folgende click die Kachel bewaffnet; der nächste pointerdown setzt den Ref zurück.
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        suppressNextClickRef.current = true;
+        setPaletteDrag(null);
+        setPointerPos(null);
+        return;
+      }
       if (e.key.toLowerCase() !== 'r' || e.metaKey || e.ctrlKey || e.altKey) return;
       e.preventDefault();
       rotatePaletteDrag();
@@ -403,6 +428,19 @@ export function PieceCanvasEditor({
       window.removeEventListener('wheel', onWheel);
     };
   }, [dragging]);
+
+  // Esc bricht auch ein laufendes Ziehen eines platzierten Stücks ab — ohne Commit, ohne Undo-Eintrag.
+  const pieceDragging = drag !== null;
+  useEffect(() => {
+    if (!pieceDragging) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      setDrag(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pieceDragging]);
 
   function handlePiecePointerDown(e: React.PointerEvent<SVGElement>, piece: Piece2D) {
     if (armed) return;
@@ -469,7 +507,14 @@ export function PieceCanvasEditor({
     setDrag(null);
   }
 
-  const selectedPiece = selectedId ? pieces.find((p) => p.id === selectedId) ?? null : null;
+  // Abbruch eines laufenden Ziehens (Esc, pointercancel, verlorene Pointer-Capture): nur verwerfen,
+  // nichts committen, daher kein Undo-Schritt. lostpointercapture feuert erst nach pointerup, das
+  // bereits committet hat — dort ist setDrag(null) nur noch ein harmloses Aufräumen.
+  function cancelPieceDrag() {
+    setDrag(null);
+  }
+
+  const selectedPiece =selectedId ? pieces.find((p) => p.id === selectedId) ?? null : null;
 
   function rotateSelected() {
     if (!selectedPiece) return;
@@ -554,6 +599,8 @@ export function PieceCanvasEditor({
   // Segmented-Control, T bewaffnet das Dreieckpodest.
   function handleCanvasKeyDown(e: React.KeyboardEvent<SVGSVGElement>) {
     if (e.key === 'Escape') {
+      setDrag(null);
+      setPaletteDrag(null);
       arm(null);
       return;
     }
@@ -863,6 +910,8 @@ export function PieceCanvasEditor({
               onPointerDown={(e) => handlePiecePointerDown(e, p)}
               onPointerMove={(e) => handlePiecePointerMove(e, p)}
               onPointerUp={() => handlePiecePointerUp(p)}
+              onPointerCancel={cancelPieceDrag}
+              onLostPointerCapture={cancelPieceDrag}
             >
               <title>
                 {formatMeters(p.w, 2)}×{formatMeters(p.d, 2)} m bei x={formatMeters(p.x, 2)}, y={formatMeters(p.y, 2)} m
@@ -946,6 +995,8 @@ export function PieceCanvasEditor({
                   onPointerDown={(e) => handlePaletteButtonPointerDown(e, tile.payload)}
                   onPointerMove={handlePaletteButtonPointerMove}
                   onPointerUp={handlePaletteButtonPointerUp}
+                  onPointerCancel={() => setPaletteDrag(null)}
+                  onLostPointerCapture={() => setPaletteDrag(null)}
                   onClick={() => {
                     if (suppressNextClickRef.current) {
                       suppressNextClickRef.current = false;
@@ -1015,7 +1066,7 @@ export function PieceCanvasEditor({
             <kbd className="rounded border border-[var(--color-border)] px-1">Entf</kbd> entfernen
           </li>
           <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">Esc</kbd> abbrechen/abwählen
+            <kbd className="rounded border border-[var(--color-border)] px-1">Esc</kbd> bricht ab (auch während des Ziehens) / wählt ab
           </li>
           <li>
             <kbd className="rounded border border-[var(--color-border)] px-1">1</kbd>–
