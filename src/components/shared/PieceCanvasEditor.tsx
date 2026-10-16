@@ -49,6 +49,8 @@ interface Props {
   canRedo?: boolean;
   /** Leert den ganzen Plan (ersetzt den bisherigen "Zurücksetzen"-Knopf im jeweiligen Modul). */
   onClear?: () => void;
+  /** Zusätzlicher Inhalt im Leerzustand, z. B. Starter-Vorlagen. */
+  emptyHint?: React.ReactNode;
   /** Bündelt mehrere Callback-Aufrufe zu einem Undo-Schritt. */
   onTransact?: (fn: () => void) => void;
   /** Beschriftung über der Kante, an der y=0 liegt (z.B. "Bühnenvorderkante"). */
@@ -107,6 +109,7 @@ export function PieceCanvasEditor({
   canUndo,
   canRedo,
   onClear,
+  emptyHint,
   onTransact,
   frontEdgeLabel = 'Vorderkante',
   minCanvasWidthM,
@@ -181,6 +184,31 @@ export function PieceCanvasEditor({
   useEffect(() => () => {
     if (blockedTimerRef.current) clearTimeout(blockedTimerRef.current);
   }, []);
+
+  // "Plan geleert"-Snackbar mit Rückgängig: verschwindet nach 6 s, nach Rückgängig und sobald wieder
+  // Stücke auf dem Plan liegen. Der Timer läuft wie blockedTimerRef über ein Ref und wird beim Unmount aufgeräumt.
+  const [clearedSnack, setClearedSnack] = useState(false);
+  const clearedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function handleClear() {
+    onClear?.();
+    setSelectedIds([]);
+    arm(null);
+    setClearedSnack(true);
+    if (clearedTimerRef.current) clearTimeout(clearedTimerRef.current);
+    clearedTimerRef.current = setTimeout(() => {
+      clearedTimerRef.current = null;
+      setClearedSnack(false);
+    }, 6000);
+  }
+  useEffect(() => () => {
+    if (clearedTimerRef.current) clearTimeout(clearedTimerRef.current);
+  }, []);
+  // Sobald wieder Stücke liegen, verschwindet die Snackbar – beim Rendern nachgezogen statt per Effect.
+  const [lastPieceCount, setLastPieceCount] = useState(pieces.length);
+  if (lastPieceCount !== pieces.length) {
+    setLastPieceCount(pieces.length);
+    if (pieces.length > 0) setClearedSnack(false);
+  }
 
   const contentWidthM = Math.max(
     pieces.reduce((m, p) => Math.max(m, p.x + p.w), 0),
@@ -737,18 +765,36 @@ export function PieceCanvasEditor({
         canShiftLeft={canShiftLeft}
         onShiftAll={shiftAll}
         shiftStepM={GRID_STEP_M}
-        onClear={onClear}
+        onClear={onClear ? handleClear : undefined}
       />
       {blockedMessage && (
         <div role="status" className="rounded-md border border-[var(--color-danger)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-danger)]">
           {blockedMessage}
         </div>
       )}
+      {clearedSnack && pieces.length === 0 && (
+        <div role="status" className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm">
+          Plan geleert
+          {onUndo && (
+            <button
+              type="button"
+              className="underline text-[var(--color-accent)]"
+              onClick={() => {
+                onUndo();
+                setClearedSnack(false);
+              }}
+            >
+              Rückgängig
+            </button>
+          )}
+        </div>
+      )}
 
+      <div className="relative">
       <svg
         ref={svgRef}
         viewBox={viewBox}
-        className="w-full h-auto max-h-[420px] rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] select-none"
+        className="block w-full h-auto max-h-[420px] rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] select-none"
         style={{ touchAction: 'none' }}
         role="img"
         aria-label="Bau-Editor — klicken und dann Tastatur nutzen (Pfeiltasten, Enter, R, Entf, Esc, 1–4, T; Kurzbefehle siehe unten)"
@@ -863,6 +909,20 @@ export function PieceCanvasEditor({
           px={metersPerPx}
         />
       </svg>
+      {pieces.length === 0 && !armed && !paletteDrag && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-4">
+          <div className="pointer-events-auto max-w-sm rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]/95 p-3 text-sm shadow-sm">
+            <p className="font-medium">Leerer Plan – so geht&apos;s</p>
+            <ol className="mt-1 list-decimal space-y-1 pl-5 text-[var(--color-text-muted)]">
+              <li>Unten ein Teil antippen und auf den Plan tippen – oder direkt hineinziehen.</li>
+              <li>R dreht, Entf entfernt, Pfeiltasten verschieben.</li>
+              <li>Strg/Cmd+Z macht jeden Schritt rückgängig.</li>
+            </ol>
+            {emptyHint}
+          </div>
+        </div>
+      )}
+      </div>
 
       <PiecePalette armed={armed} hint="Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil. Beim Ziehen zeigen Hilfslinien Fluchten, Abstände und das Gesamtmaß in m. Alt gedrückt halten: frei platzieren, ohne Einrasten." {...paletteCallbacks} />
 

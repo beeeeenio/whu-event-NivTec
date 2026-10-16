@@ -26,7 +26,7 @@ interface EditorToolbarProps {
 }
 
 /** Aktionsleiste über dem Plan: Statustext, Rückgängig/Wiederholen, Drehen, Duplizieren, Spiegeln,
- *  Entfernen, Abwählen/Abbrechen sowie "Alles verschieben" und Zurücksetzen. Reine Darstellung —
+ *  Entfernen, Abwählen/Abbrechen sowie "Alles verschieben" und Plan leeren. Reine Darstellung —
  *  alle Entscheidungen (ob ein Schalter aktiv ist) trifft der Editor und reicht sie als Props herein. */
 export function EditorToolbar({
   statusText,
@@ -126,8 +126,13 @@ export function EditorToolbar({
           </div>
         )}
         {onClear && piecesCount > 0 && (
-          <button type="button" onClick={onClear} title="Leert den ganzen Plan" className={`${ACTION_BTN} enabled:hover:!border-[var(--color-danger)] enabled:hover:!text-[var(--color-danger)]`}>
-            Zurücksetzen
+          <button
+            type="button"
+            onClick={onClear}
+            title="Leert den ganzen Plan – lässt sich rückgängig machen"
+            className={`${ACTION_BTN} enabled:hover:!border-[var(--color-danger)] enabled:hover:!text-[var(--color-danger)]`}
+          >
+            Plan leeren
           </button>
         )}
       </div>
