@@ -500,7 +500,7 @@ export function PieceCanvasEditor({
       moved: false,
       target: null,
       grabOffset: { x: start.x - piece.x, y: start.y - piece.y },
-      group: inGroup ?{ startX: start.x, startY: start.y, dx: 0, dy: 0, valid: true } : undefined,
+      group: inGroup ? { startX: start.x, startY: start.y, dx: 0, dy: 0, valid: true } : undefined,
     });
   }
 
@@ -553,7 +553,7 @@ export function PieceCanvasEditor({
     setDrag(null);
   }
 
-  const selectedPiece =selectedId ? pieces.find((p) => p.id === selectedId) ?? null : null;
+  const selectedPiece = selectedId ? pieces.find((p) => p.id === selectedId) ?? null : null;
 
   function rotateSelected() {
     if (!selectedPiece) return;
@@ -814,7 +814,7 @@ export function PieceCanvasEditor({
                 type="button"
                 onClick={() => shiftAll(-GRID_STEP_M)}
                 disabled={!canShiftLeft}
-                title={canShiftLeft ? 'Alle Stücke gemeinsam 0,5 m nach links (Umschalt+← ohne Auswahl)' :'Die Fläche liegt schon am linken Rand'}
+                title={canShiftLeft ? 'Alle Stücke gemeinsam 0,5 m nach links (Umschalt+← ohne Auswahl)' : 'Die Fläche liegt schon am linken Rand'}
                 aria-label="Alle Stücke 0,5 m nach links verschieben"
                 className={ACTION_BTN}
               >
