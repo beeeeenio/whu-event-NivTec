@@ -12,8 +12,21 @@ export function isPrimaryButton(e: { button: number }): boolean {
 
 export const WHEEL_ROTATE_MIN_INTERVAL_MS = 300;
 
-/** Drehen per Mausrad: nie bei Strg (Trackpad-Pinch), höchstens einmal je Intervall. */
-export function shouldRotateOnWheel(e: { ctrlKey: boolean }, nowMs: number, lastRotateMs: number | null, minIntervalMs = WHEEL_ROTATE_MIN_INTERVAL_MS): boolean {
-  if (e.ctrlKey) return false;
+/** Drehen per Mausrad: nie bei Strg/Cmd (Trackpad-Pinch, Zoom), höchstens einmal je Intervall. */
+export function shouldRotateOnWheel(e: { ctrlKey: boolean; metaKey?: boolean }, nowMs: number, lastRotateMs: number | null, minIntervalMs = WHEEL_ROTATE_MIN_INTERVAL_MS): boolean {
+  if (e.ctrlKey || e.metaKey) return false;
   return lastRotateMs === null || nowMs - lastRotateMs >= minIntervalMs;
+}
+
+export type WheelIntent = 'rotate' | 'zoom' | 'scroll' | 'ignore';
+
+/**
+ * Belegung des Mausrads: Während des Palette-Ziehens dreht das reine Rad das Stück; Strg/Cmd+Rad wird
+ * dann verworfen (kein Zoom während des Ziehens, viewBox bleibt stabil). Sonst zoomt Strg/Cmd+Rad
+ * (inkl. Trackpad-Pinch) den Plan, das reine Rad scrollt die Seite.
+ */
+export function wheelIntent(e: { ctrlKey: boolean; metaKey: boolean }, ctx: { paletteDragging: boolean }): WheelIntent {
+  const modifier = e.ctrlKey || e.metaKey;
+  if (ctx.paletteDragging) return modifier ? 'ignore' : 'rotate';
+  return modifier ? 'zoom' : 'scroll';
 }
