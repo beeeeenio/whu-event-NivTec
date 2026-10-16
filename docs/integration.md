@@ -101,3 +101,27 @@ interface ForexPanel {
 - Exportiert werden nur Blenden an Kanten, die im aktuellen Plan frei sind (kein Nachbarpodest liegt an). Druckbilder sind nie Teil der Datei.
 - Drucke lassen sich im NivTec-Tool wie in der Stadthallenplanung hochladen: je Platte oder je `printGroup` (ein Bild wird von außen gesehen links → rechts über die Platten verteilt, gleiche Schnitt- und Sortierlogik). Sie liegen nur lokal im Browser (IndexedDB, je `ForexPanel.id`) und dienen der 3D-Vorschau. „Alle Vorderkanten“ setzt `printGroup: 'vorne'`.
 - Zuschnitt in der Materialliste: Kantenlänge × (Bauhöhe − 10 mm), z. B. „Forex 2000 × 590 mm, 5 mm“ bei 60 cm.
+
+## Raumkontur (optionales Feld `room`)
+
+Bühne und Tresen können optional eine Raumkontur mit Hindernissen speichern. Der Raum dient nur der Planung im Editor: Er bestimmt, wo Stücke liegen dürfen, und fließt nicht in Grundriss, 3D, Materialliste oder PPTX ein. Leser dürfen das Feld ignorieren; alte Dateien ohne `room` bleiben gültig.
+
+```ts
+interface RoomPlan {
+  widthM: number              // Breite in Metern, > 0 (höchstens 500)
+  depthM: number              // Tiefe in Metern, > 0 (höchstens 500)
+  obstacles: RoomObstacle[]
+}
+interface RoomObstacle {
+  id: string                  // eindeutig im Raum, z. B. "ob-1"
+  kind: 'saeule' | 'tuer' | 'notausgang'
+  x: number                   // Ursprung oben links wie im Plan, x von links
+  y: number                   // y von der Vorderkante nach hinten
+  w: number                   // Breite in Metern, > 0
+  d: number                   // Tiefe in Metern, > 0
+  label?: string              // optionale Bezeichnung, höchstens 80 Zeichen
+}
+```
+
+- Beim Import werden ungültige Hindernisse einzeln verworfen (unbekannte Art, doppelte ID, negative Position, Maße ≤ 0); ein ungültiger Raum (Breite oder Tiefe) wird ganz ignoriert.
+- Beim Tresen gilt der Raum nur für den Unterbau. Die Thekenplatte steht auf dem Unterbau und wird nicht gegen den Raum geprüft.

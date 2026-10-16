@@ -13,6 +13,7 @@ import { StairsRampCalculator } from '../../components/shared/StairsRampCalculat
 import { SummaryStats } from '../../components/shared/SummaryStats';
 import { WarningBanner } from '../../components/shared/WarningBanner';
 import { buildLayoutFromPieces, makePieceId, normalizeToOrigin } from '../../domain/customShape';
+import { obstaclesOverlapping, piecesOutsideRoom } from '../../domain/room';
 import {
   addAllFrontEdges,
   appendMaterialItems,
@@ -41,6 +42,7 @@ import type { ForexPanel, ForexSide } from '../../domain/types';
 import { ForexEdgeEditor } from './ForexEdgeEditor';
 import { STAGE_TEMPLATES } from '../../domain/templates';
 import { ACTION_BTN } from '../../components/shared/editor/styles';
+import { RoomPanel } from '../../components/shared/RoomPanel';
 
 type ResultTab = 'kennzahlen' | 'grundriss' | '3d' | 'material';
 
@@ -56,7 +58,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
     forexPanels: [],
   });
   const { set: setDoc, undo, redo, canUndo, canRedo, transact } = doc;
-  const { heightCm, pieces, forexPanels } = doc.value;
+  const { heightCm, pieces, forexPanels, room } = doc.value;
   const setHeightCm = (v: number) => doc.set((d) => setDocField(d, 'heightCm', v));
   const setForexPanels = (u: ForexPanel[] | ((p: ForexPanel[]) => ForexPanel[])) =>
     doc.set((d) => setDocField(d, 'forexPanels', u));
@@ -145,6 +147,16 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
 
   const hasContent = pieces.length > 0;
 
+  // Stücke auf Hindernissen oder außerhalb des Raums (nur mit Raum). Der Raum liegt in denselben
+  // Koordinaten wie der Editor, daher wird gegen die echten Positionen geprüft, nicht gegen normalizedPieces.
+  const roomConflictCount = useMemo(() => {
+    const outside = new Set(piecesOutsideRoom(pieces, room).map((p) => p.id));
+    for (const p of pieces) {
+      if (obstaclesOverlapping([p], room).length > 0) outside.add(p.id);
+    }
+    return outside.size;
+  }, [pieces, room]);
+
   // Import-Bericht: verworfene Stücke/Blenden und neu vergebene IDs aus dem letzten Laden
   const [importNotes, setImportNotes] = useState<string[]>([]);
 
@@ -157,15 +169,24 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
     setImportNotes(result.warnings);
     const v = result.value;
     // Import ist ein einziger Undo-Schritt: Höhe, Stücke und Blenden zusammen.
-    doc.set((d) => ({ heightCm: v.heightCm ?? d.heightCm, pieces: v.pieces, forexPanels: v.forexPanels ?? [] }));
+    doc.set((d) => ({
+      heightCm: v.heightCm ?? d.heightCm,
+      pieces: v.pieces,
+      forexPanels: v.forexPanels ?? [],
+      room: v.room,
+    }));
     return null;
   }
 
-  // forexPanels nur mitschreiben, wenn es welche gibt — Dateien ohne Blenden bleiben wie bisher.
-  const currentSavedState: KastenbuehneSavedState =
-    activeForexPanels.length > 0
-      ? { schemaVersion: PLAN_SCHEMA_VERSION, kind: 'kastenbuehne', heightCm, pieces, forexPanels: activeForexPanels }
-      : { schemaVersion: PLAN_SCHEMA_VERSION, kind: 'kastenbuehne', heightCm, pieces };
+  // forexPanels und room nur mitschreiben, wenn es welche gibt — Dateien ohne Blenden/Raum bleiben wie bisher.
+  const currentSavedState: KastenbuehneSavedState = {
+    schemaVersion: PLAN_SCHEMA_VERSION,
+    kind: 'kastenbuehne',
+    heightCm,
+    pieces,
+    ...(activeForexPanels.length > 0 ? { forexPanels: activeForexPanels } : {}),
+    ...(room ? { room } : {}),
+  };
 
   function handleToggleForex(pieceId: string, side: ForexSide) {
     setForexPanels((prev) => toggleForexPanel(prev, pieceId, side));
@@ -197,7 +218,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
               type="button"
               onClick={() => {
                 discard();
-                doc.set({ heightCm: STRUCTURE_RULES.buehne.heightOptionsCm[0], pieces: [], forexPanels: [] });
+                doc.set({ heightCm: STRUCTURE_RULES.buehne.heightOptionsCm[0], pieces: [], forexPanels: [], room: undefined });
                 setForexPrints({});
               }}
               className="shrink-0 text-xs underline"
@@ -235,8 +256,25 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
             Fußtyp: Alu-Lastenverteilerfuß (LV-Fuß), Höhenserie 20–200 cm
           </span>
         </div>
+        <details className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5">
+          <summary className="cursor-pointer text-sm font-semibold text-[var(--color-text)]">
+            Raum & Hindernisse
+            {room && (
+              <span className="ml-2 text-xs font-normal text-[var(--color-text-muted)]">
+                {formatMeters(room.widthM)} × {formatMeters(room.depthM)} m, {room.obstacles.length} Hindernisse
+              </span>
+            )}
+          </summary>
+          <div className="mt-3">
+            <RoomPanel room={room} onChange={(r) => doc.set((d) => setDocField(d, 'room', r))} />
+          </div>
+        </details>
+        {roomConflictCount > 0 && (
+          <WarningBanner>{roomConflictCount} Stücke liegen auf Hindernissen oder außerhalb des Raums.</WarningBanner>
+        )}
         <PieceCanvasEditor
           {...editorProps}
+          room={room}
           frontEdgeLabel="Vorderkante"
           emptyHint={
             <div className="mt-2 flex flex-wrap gap-1.5">

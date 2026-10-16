@@ -1,5 +1,6 @@
 import type { Piece2D } from './customShape';
 import type { ForexPanel } from './types';
+import type { RoomPlan } from './room';
 
 /**
  * Gemeinsames Dokument einer Kastenbühne — liegt als Ganzes in EINER Undo-Historie, damit Höhe,
@@ -9,6 +10,8 @@ export interface KastenbuehneDoc {
   heightCm: number;
   pieces: Piece2D[];
   forexPanels: ForexPanel[];
+  /** Optional — Raumkontur mit Hindernissen; nur der Editor nutzt sie (Grundriss, 3D und Export nicht). */
+  room?: RoomPlan;
 }
 
 /** Gemeinsames Dokument eines Tresens — beide Ebenen und beide Höhen teilen sich eine Undo-Historie. */
@@ -17,6 +20,11 @@ export interface TresenDoc {
   spindelHeightCm: number;
   basePieces: Piece2D[];
   topPieces: Piece2D[];
+  /**
+   * Optional — Raumkontur gilt nur für den Unterbau-Editor. Die Thekenplatte steht nicht auf dem
+   * Boden, sondern auf dem Unterbau, daher wird sie nicht gegen den Raum geprüft.
+   */
+  room?: RoomPlan;
 }
 
 /**

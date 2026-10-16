@@ -12,6 +12,8 @@ import { SavedConfigsPanel } from '../../components/shared/SavedConfigsPanel';
 import { SummaryStats } from '../../components/shared/SummaryStats';
 import { WarningBanner } from '../../components/shared/WarningBanner';
 import { boundingBoxOf, buildLayoutFromPieces, fillHorizontalSpan, makePieceId } from '../../domain/customShape';
+import { obstaclesOverlapping, piecesOutsideRoom } from '../../domain/room';
+import { RoomPanel } from '../../components/shared/RoomPanel';
 import { buildMaterialList, mergeMaterialLists } from '../../domain/materialList';
 import { isBracingRequired, STRUCTURE_RULES } from '../../domain/rules';
 import { SPINDEL_HEIGHT_OPTIONS_CM } from '../../domain/tresen';
@@ -53,7 +55,7 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
     topPieces: [],
   });
   const { set: setDoc, undo, redo, canUndo, canRedo, transact } = doc;
-  const { baseHeightCm, spindelHeightCm, basePieces, topPieces } = doc.value;
+  const { baseHeightCm, spindelHeightCm, basePieces, topPieces, room } = doc.value;
   const setBaseHeightCm = (v: number) => doc.set((d) => setDocField(d, 'baseHeightCm', v));
   const setSpindelHeightCm = (v: number) => doc.set((d) => setDocField(d, 'spindelHeightCm', v));
 
@@ -133,6 +135,15 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
 
   const hasContent = basePieces.length > 0 || topPieces.length > 0;
 
+  // Raum gilt nur für den Unterbau (siehe TresenDoc): Stücke auf Hindernissen oder außerhalb des Raums.
+  const roomConflictCount = useMemo(() => {
+    const outside = new Set(piecesOutsideRoom(basePieces, room).map((p) => p.id));
+    for (const p of basePieces) {
+      if (obstaclesOverlapping([p], room).length > 0) outside.add(p.id);
+    }
+    return outside.size;
+  }, [basePieces, room]);
+
   // Setzt die Thekenplatte auf dieselbe Breite wie der aktuelle Unterbau, bei halber Tiefe —
   // ersetzt den bisherigen Inhalt der Ebene komplett (kein Zusammenführen), da das eine bewusste
   // Neuerzeugung ist, kein Hinzufügen. Zieltiefe wird aus CATALOG_DEPTHS_M ausgewählt: die größte
@@ -173,10 +184,12 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
       spindelHeightCm: v.spindelHeightCm ?? d.spindelHeightCm,
       basePieces: v.basePieces,
       topPieces: v.topPieces,
+      room: v.room,
     }));
     return null;
   }
 
+  // room nur mitschreiben, wenn gesetzt — Dateien ohne Raum bleiben wie bisher.
   const currentSavedState: TresenSavedState = {
     schemaVersion: PLAN_SCHEMA_VERSION,
     kind: 'tresen',
@@ -184,6 +197,7 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
     spindelHeightCm,
     basePieces,
     topPieces,
+    ...(room ? { room } : {}),
   };
   const { restored, discard, saveError, otherTabChanged, reloadFromOtherTab, dismissOtherTab } = useDraftAutosave(
     'tresen',
@@ -222,6 +236,7 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
                   spindelHeightCm: SPINDEL_HEIGHT_OPTIONS_CM[1],
                   basePieces: [],
                   topPieces: [],
+                  room: undefined,
                 });
               }}
               className="shrink-0 text-xs underline"
@@ -258,8 +273,26 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
           <HeightSelector heightOptionsCm={STRUCTURE_RULES.tresen.heightOptionsCm} valueCm={baseHeightCm} onChange={setBaseHeightCm} />
         </div>
         {bracingRequired && <WarningBanner>Ab 80 cm Unterbauhöhe ist eine Diagonalverstrebung erforderlich.</WarningBanner>}
+        {/* Raum nur am Unterbau: Die Thekenplatte steht auf dem Unterbau, nicht auf dem Boden. */}
+        <details className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5">
+          <summary className="cursor-pointer text-sm font-semibold text-[var(--color-text)]">
+            Raum & Hindernisse (für den Unterbau)
+            {room && (
+              <span className="ml-2 text-xs font-normal text-[var(--color-text-muted)]">
+                {formatMeters(room.widthM)} × {formatMeters(room.depthM)} m, {room.obstacles.length} Hindernisse
+              </span>
+            )}
+          </summary>
+          <div className="mt-3">
+            <RoomPanel room={room} onChange={(r) => doc.set((d) => setDocField(d, 'room', r))} />
+          </div>
+        </details>
+        {roomConflictCount > 0 && (
+          <WarningBanner>{roomConflictCount} Stücke liegen auf Hindernissen oder außerhalb des Raums.</WarningBanner>
+        )}
         <PieceCanvasEditor
           {...baseEditorProps}
+          room={room}
           frontEdgeLabel="Unterbau-Vorderkante"
           minCanvasWidthM={sharedCanvasWidthM}
           referenceFootprint={topBoundingBox ? { ...topBoundingBox, label: 'Thekenplatte' } : undefined}
