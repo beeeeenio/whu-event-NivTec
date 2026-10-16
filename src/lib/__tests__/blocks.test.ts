@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { deleteBlock, listBlocks, saveBlock, selectionToBlock, type SavedBlock } from '../blocks';
+import { deleteBlock, listBlocks, saveBlock, selectionToBlock, subscribeBlocks, type SavedBlock } from '../blocks';
 import type { Piece2D } from '../../domain/customShape';
 
 /** Einfacher localStorage-Ersatz für die Tests (die Testumgebung ist 'node'). */
@@ -96,5 +96,24 @@ describe('listBlocks', () => {
   it('liefert bei unlesbaren Daten eine leere Liste', () => {
     stubLocalStorage('{kein json');
     expect(listBlocks()).toEqual([]);
+  });
+});
+
+describe('subscribeBlocks', () => {
+  it('meldet Speichern und Löschen an alle Abonnenten (z. B. beide Tresen-Ebenen) und lässt sich abmelden', () => {
+    stubLocalStorage();
+    vi.stubGlobal('window', new EventTarget());
+    const onChange = vi.fn();
+    const unsubscribe = subscribeBlocks(onChange);
+    saveBlock({ id: 'x', name: 'X', pieces: [{ x: 0, y: 0, w: 1, d: 1 }] });
+    deleteBlock('x');
+    expect(onChange).toHaveBeenCalledTimes(2);
+    unsubscribe();
+    saveBlock({ id: 'y', name: 'Y', pieces: [{ x: 0, y: 0, w: 1, d: 1 }] });
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('ohne window: kein Fehler', () => {
+    expect(() => subscribeBlocks(() => {})()).not.toThrow();
   });
 });

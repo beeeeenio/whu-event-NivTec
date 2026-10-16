@@ -12,6 +12,23 @@ export interface SavedBlock {
 /** localStorage-Schlüssel für die eigenen Bausteine. Gilt für Kastenbühne und Tresen gemeinsam. */
 const STORAGE_KEY = 'nivtec:blocks';
 
+/** Fenster-Ereignis nach jeder Änderung, damit alle offenen Editoren (z. B. beide Tresen-Ebenen) neu lesen. */
+export const BLOCKS_CHANGED_EVENT = 'nivtec:blocks-changed';
+
+/** Meldet Änderungen der Bausteine (eigene Seite per Ereignis, andere Tabs per storage-Ereignis); liefert Abmelden. */
+export function subscribeBlocks(onChange: () => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === null || e.key === STORAGE_KEY) onChange();
+  };
+  window.addEventListener(BLOCKS_CHANGED_EVENT, onChange);
+  window.addEventListener('storage', onStorage);
+  return () => {
+    window.removeEventListener(BLOCKS_CHANGED_EVENT, onChange);
+    window.removeEventListener('storage', onStorage);
+  };
+}
+
 /** Normalisiert die Auswahl auf (0,0) und entfernt die IDs; null bei leerer Auswahl. Bausteine sind reine
  *  Geometrie und landen nie in der Plan-Datei. */
 export function selectionToBlock(pieces: Piece2D[], ids: readonly string[], name: string, id: string): SavedBlock | null {
@@ -66,6 +83,9 @@ function writeBlocks(blocks: SavedBlock[]): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(blocks));
   } catch {
     // localStorage kann z.B. im privaten Modus nicht verfügbar sein — stiller Fallback wie bei den gespeicherten Konfigurationen.
+  }
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new Event(BLOCKS_CHANGED_EVENT));
   }
 }
 

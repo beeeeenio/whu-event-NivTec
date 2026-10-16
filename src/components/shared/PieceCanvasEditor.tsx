@@ -25,7 +25,7 @@ import { alignmentGuides, nearestGaps, unionBounds, type Rect } from '../../doma
 import { isSondermassPiece, TRIANGLE_PANEL_SIZE_M } from '../../domain/panels';
 import { triangleHand } from '../../domain/triangle';
 import { mirrorPayload, payloadMatches, payloadSize, payloadToFilled, payloadToFilledPieces, rotatePayload, type ToolPayload } from '../../domain/toolPayload';
-import { deleteBlock, listBlocks, saveBlock, selectionToBlock, type SavedBlock } from '../../lib/blocks';
+import { deleteBlock, listBlocks, saveBlock, selectionToBlock, subscribeBlocks, type SavedBlock } from '../../lib/blocks';
 import { formatMeters } from '../../lib/format';
 import { dragThresholdPx, isPrimaryButton, shouldRotateOnWheel, wheelIntent } from '../../lib/pointer';
 import { createFrameThrottle } from '../../lib/pointerDrag';
@@ -198,6 +198,8 @@ export function PieceCanvasEditor({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // Eigene Bausteine (localStorage, gilt für Kastenbühne und Tresen); liegen nie in der Plan-Datei.
   const [blocks, setBlocks] = useState<SavedBlock[]>(() => listBlocks());
+  // Beide Tresen-Ebenen (und andere Tabs) sehen neu gespeicherte oder gelöschte Bausteine sofort.
+  useEffect(() => subscribeBlocks(() => setBlocks(listBlocks())), []);
   // Stabile Liste für die memo-Palette: nur neu bauen, wenn sich die Bausteine ändern.
   const paletteBlocks = useMemo(
     () =>
