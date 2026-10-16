@@ -109,6 +109,24 @@ describe('buildScaledPlanSvg', () => {
     expect(svg).toContain('2,00');
   });
 
+  it('setzt die Linienstärke in Plan-Metern statt über vector-effect', () => {
+    const svg = buildScaledPlanSvg(options());
+    expect(svg).not.toContain('vector-effect');
+    // 0,25 mm auf dem Papier bei 20 mm je Meter = 0,0125 m.
+    expect(svg).toContain('stroke-width="0.0125"');
+  });
+
+  it('rückt Abschnitte mit langer Überschrift weit genug auseinander', () => {
+    // Zwei 1-m-Abschnitte (20 mm) mit langer Überschrift: der zweite beginnt erst hinter dem Text.
+    const label = 'Thekenplatte (oben)';
+    const svg = buildScaledPlanSvg(
+      options({ sections: [section(label, gridPanels(1, 1, 1, 1), 110), section('Unterbau', gridPanels(1, 1, 1, 1), 100)] }),
+    );
+    const xs = [...svg.matchAll(/<text x="([\d.]+)" y="13.5" font-size="3.5"/g)].map((m) => Number(m[1]));
+    expect(xs).toHaveLength(2);
+    expect(xs[1] - xs[0]).toBeGreaterThan(`${label} – BH 110 cm`.length * 3.5 * 0.5);
+  });
+
   it('escaped den Titel und alle anderen Texte', () => {
     const svg = buildScaledPlanSvg(options({ title: 'A <B> & "C"' }));
     expect(svg).toContain('A &lt;B&gt; &amp; &quot;C&quot;');

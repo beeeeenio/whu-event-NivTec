@@ -80,6 +80,10 @@ const SCALEBAR_FIELDS = 4;
 const LEGEND_ITEM_MM = 20;
 const LEGEND_ROW_MM = 6.5;
 const FONT_FAMILY = 'Arial, sans-serif';
+/** Schriftgröße der Abschnittsüberschrift, in mm. */
+const SECTION_LABEL_SIZE_MM = 3.5;
+/** Linienstärke der Plattenkanten auf dem Papier, in mm. */
+const PANEL_STROKE_MM = 0.25;
 
 /** Papiermaße in mm; 'hoch' tauscht Breite und Höhe. */
 export function paperSizeMm(f: PaperFormat, o: PaperOrientation): { w: number; h: number } {
@@ -129,11 +133,18 @@ function labelBox(cx: number, cy: number, content: string, size: number): string
 
 /** Abschnittsgröße auf dem Papier in mm: Fläche in echtem Maßstab plus Beschriftung und Maßketten. */
 function sectionSizeMm(s: ScaledPlanSection, scale: PlanScale): { w: number; h: number } {
+  // Die Überschrift darf nicht in den Nachbarabschnitt laufen: grobe Breite des fetten Texts.
+  const labelW = sectionLabel(s).length * SECTION_LABEL_SIZE_MM * 0.6;
   const box = boundingBoxOf(s.layout.panels);
-  if (!box) return { w: 0, h: AUDIENCE_MM };
+  if (!box) return { w: labelW, h: AUDIENCE_MM };
   const k = mmPerMeter(scale);
   const extra = s.showDimensions ? DIM_EXTRA_MM : 0;
-  return { w: box.widthM * k + extra, h: AUDIENCE_MM + box.depthM * k + extra };
+  return { w: Math.max(box.widthM * k + extra, labelW), h: AUDIENCE_MM + box.depthM * k + extra };
+}
+
+/** Überschrift eines Abschnitts. */
+function sectionLabel(s: ScaledPlanSection): string {
+  return `${s.label} – BH ${s.heightCm} cm`;
 }
 
 /**
@@ -149,10 +160,14 @@ export function planFitsOnPaper(o: ScaledPlanOptions): boolean {
   return totalW <= w - 2 * PLAN_MARGIN_MM + EPS && maxH <= h - 2 * PLAN_MARGIN_MM - STRIP_MM + EPS;
 }
 
-/** Ein Stück in Plan-Metern als SVG-Element; die Umrechnung übernimmt die umgebende Gruppe. */
-function panelSvg(p: PanelInstance): string {
+/**
+ * Ein Stück in Plan-Metern als SVG-Element; die Umrechnung übernimmt die umgebende Gruppe.
+ * Die Linienstärke wird durch k geteilt statt vector-effect zu nutzen: non-scaling-stroke rechnet
+ * in Bildschirm-Pixeln und wird von Druck-/PDF-Werkzeugen oft ignoriert (dann 0,25 m breite Kanten).
+ */
+function panelSvg(p: PanelInstance, k: number): string {
   const fill = p.isSondermass ? PANEL_SONDERMASS_FILL : PANEL_FILL;
-  const style = `fill="${fill}" stroke="${PANEL_STROKE}" stroke-width="0.25" vector-effect="non-scaling-stroke"`;
+  const style = `fill="${fill}" stroke="${PANEL_STROKE}" stroke-width="${num(PANEL_STROKE_MM / k)}"`;
   if (p.corner !== undefined && p.shape === 'viertelkreis') {
     return `<path d="${quarterCirclePath(p, p.corner)}" ${style}/>`;
   }
@@ -172,7 +187,7 @@ function panelSvg(p: PanelInstance): string {
  */
 function sectionSvg(s: ScaledPlanSection, x0: number, y0: number, k: number): string[] {
   const out: string[] = [];
-  out.push(textEl(x0, y0 + 3.5, `${s.label} – BH ${s.heightCm} cm`, { size: 3.5, bold: true }));
+  out.push(textEl(x0, y0 + 3.5, sectionLabel(s), { size: SECTION_LABEL_SIZE_MM, bold: true }));
 
   const box = boundingBoxOf(s.layout.panels);
   if (!box) return out;
@@ -194,11 +209,11 @@ function sectionSvg(s: ScaledPlanSection, x0: number, y0: number, k: number): st
 
   // Platten und Füße: Plan-Meter in einer Gruppe, die auf mm skaliert.
   out.push(`<g transform="translate(${num(ox)} ${num(oy)}) scale(${num(k)})">`);
-  for (const p of s.layout.panels) out.push(panelSvg(p));
+  for (const p of s.layout.panels) out.push(panelSvg(p, k));
   const footColor = footColorForHeight(s.heightCm);
   for (const f of s.feet) {
     out.push(
-      `<circle cx="${num(f.renderX)}" cy="${num(f.renderY)}" r="${num(FOOT_RADIUS_MM / k)}" fill="${footColor}" stroke="#000000" stroke-width="0.1" vector-effect="non-scaling-stroke"/>`,
+      `<circle cx="${num(f.renderX)}" cy="${num(f.renderY)}" r="${num(FOOT_RADIUS_MM / k)}" fill="${footColor}" stroke="#000000" stroke-width="${num(0.1 / k)}"/>`,
     );
   }
   out.push('</g>');
