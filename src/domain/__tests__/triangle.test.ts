@@ -61,7 +61,7 @@ describe('quarterCirclePath', () => {
   it('generiert einen SVG-Pfad für corner=tr (Mittelpunkt oben-rechts, Bogen nach unten-links)', () => {
     // corner=tr: Mittelpunkt (1,0), Endpunkte (0,0) und (1,1)
     const path = quarterCirclePath(piece, 'tr');
-    expect(path).toBe('M 1 0 L 0 0 A 1 1 0 0 1 1 1 Z');
+    expect(path).toBe('M 1 0 L 0 0 A 1 1 0 0 0 1 1 Z');
   });
 
   it('generiert einen SVG-Pfad für corner=bl (Mittelpunkt unten-links, Bogen nach oben-rechts)', () => {
@@ -73,7 +73,18 @@ describe('quarterCirclePath', () => {
   it('generiert einen SVG-Pfad für corner=br (Mittelpunkt unten-rechts, Bogen nach oben-links)', () => {
     // corner=br: Mittelpunkt (1,1), Endpunkte (1,0) und (0,1)
     const path = quarterCirclePath(piece, 'br');
-    expect(path).toBe('M 1 1 L 1 0 A 1 1 0 0 1 0 1 Z');
+    expect(path).toBe('M 1 1 L 1 0 A 1 1 0 0 0 0 1 Z');
+  });
+
+  it('wölbt den Bogen bei jeder Ecke nach außen (Bogenmitte liegt in der Bounding-Box)', () => {
+    // Bogen mit Mittelpunkt c: Bogenmitte = c + r·(normierte Winkelhalbierende) — muss im 1×1-Feld liegen.
+    // Mit falschem sweep-flag läge der Bogen um die Phantom-Ecke (nach innen gewölbt).
+    for (const corner of ['tl', 'tr', 'bl', 'br'] as const) {
+      const m = /M (\S+) (\S+) L (\S+) (\S+) A 1 1 0 0 (\d) (\S+) (\S+) Z/.exec(quarterCirclePath(piece, corner))!;
+      const [cx, cy, ax, ay, sweep, bx, by] = m.slice(1).map(Number);
+      const cross = (ax - cx) * (by - cy) - (ay - cy) * (bx - cx);
+      expect(sweep).toBe(cross > 0 ? 1 : 0);
+    }
   });
 
   it('verschiebt den Pfad korrekt für ein Stück, das nicht am Ursprung liegt', () => {
