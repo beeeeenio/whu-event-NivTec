@@ -703,6 +703,8 @@ export function PieceCanvasEditor({
   const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
   const pinchRef = useRef<{ dist: number; mid: { x: number; y: number }; cumFactor: number; zoomed: boolean } | null>(null);
   const touchScrollRef = useRef<{ id: number; lastX: number; lastY: number; startX: number; startY: number } | null>(null);
+  // Start eines Fingers auf leerer Fläche (Seite scrollen oder gezoomt verschieben): kurzes Tippen hebt die Auswahl auf.
+  const touchTapRef = useRef<{ id: number; startX: number; startY: number } | null>(null);
 
   // Abstand und Mittelpunkt der ersten beiden Finger neu merken (bei Start und wenn sich das Fingerpaar ändert).
   function resetPinchReference() {
@@ -760,11 +762,15 @@ export function PieceCanvasEditor({
         pieceDrag.cancel();
         panDrag.cancel();
         touchScrollRef.current = null;
+        touchTapRef.current = null;
         pinchRef.current = { dist: 0, mid: { x: 0, y: 0 }, cumFactor: 1, zoomed: view !== null };
         setFrozenBase(baseView);
       }
       resetPinchReference();
       return;
+    }
+    if (intent === 'page-scroll' || intent === 'pan-view') {
+      touchTapRef.current = { id: e.pointerId, startX: e.clientX, startY: e.clientY };
     }
     if (intent === 'page-scroll') {
       touchScrollRef.current = { id: e.pointerId, lastX: e.clientX, lastY: e.clientY, startX: e.clientX, startY: e.clientY };
@@ -801,10 +807,12 @@ export function PieceCanvasEditor({
     const points = touchPointsRef.current;
     points.delete(e.pointerId);
     const scroll = touchScrollRef.current;
-    if (scroll && scroll.id === e.pointerId) {
-      touchScrollRef.current = null;
-      // Tippen ohne Bewegung auf leerer Fläche hebt die Auswahl auf.
-      const tap = Math.hypot(e.clientX - scroll.startX, e.clientY - scroll.startY) < TAP_SLOP_PX;
+    if (scroll && scroll.id === e.pointerId) touchScrollRef.current = null;
+    const tapStart = touchTapRef.current;
+    if (tapStart && tapStart.id === e.pointerId) {
+      touchTapRef.current = null;
+      // Tippen ohne Bewegung auf leerer Fläche hebt die Auswahl auf (auch gezoomt, wo der Finger sonst verschiebt).
+      const tap = Math.hypot(e.clientX - tapStart.startX, e.clientY - tapStart.startY) < TAP_SLOP_PX;
       if (!cancelled && tap) setSelectedIds([]);
     }
     if (pinchRef.current) {
