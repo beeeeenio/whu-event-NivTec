@@ -1,4 +1,4 @@
-import { fitsAt, makePieceId, mirrorPieceInPlace, rotatePieceInPlace, type FilledPiece, type Piece2D } from './customShape';
+import { fitsAllAt, fitsAt, makePieceId, mirrorPieceInPlace, rotatePieceInPlace, type FilledPiece, type Piece2D } from './customShape';
 
 /**
  * Appends filled pieces (without IDs) to the pieces array, assigning fresh IDs.
@@ -69,6 +69,32 @@ export function removePiecesByIds(pieces: Piece2D[], ids: readonly string[]): Pi
   const set = new Set(ids);
   if (!pieces.some((p) => set.has(p.id))) return pieces;
   return pieces.filter((p) => !set.has(p.id));
+}
+
+/**
+ * Kopie der Stücke `ids` (ohne id), als Block um k × Blockbreite nach rechts versetzt (k = 1..maxSteps, erste freie Stelle).
+ * null, wenn ids leer sind oder nichts frei ist.
+ */
+export function duplicateWithOffset(pieces: Piece2D[], ids: readonly string[], maxSteps = 20): FilledPiece[] | null {
+  const set = new Set(ids);
+  const sel = pieces.filter((p) => set.has(p.id));
+  if (sel.length === 0) return null;
+  const minX = Math.min(...sel.map((p) => p.x));
+  const maxX = Math.max(...sel.map((p) => p.x + p.w));
+  const bw = maxX - minX;
+  for (let k = 1; k <= maxSteps; k++) {
+    const dx = k * bw;
+    const copy: FilledPiece[] = sel.map((p) => ({
+      x: r3(p.x + dx),
+      y: p.y,
+      w: p.w,
+      d: p.d,
+      ...(p.corner !== undefined ? { corner: p.corner } : {}),
+      ...(p.shape !== undefined ? { shape: p.shape } : {}),
+    }));
+    if (fitsAllAt(pieces, copy)) return copy;
+  }
+  return null;
 }
 
 /** Rounds to 3 decimal places (mm precision for meter values). */

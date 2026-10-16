@@ -6,7 +6,7 @@ import {
   type FilledPiece,
   type Piece2D,
 } from '../../domain/customShape';
-import { checkGroupMove } from '../../domain/pieceOps';
+import { checkGroupMove, duplicateWithOffset } from '../../domain/pieceOps';
 import { isSondermassPiece, TRIANGLE_PANEL_SIZE_M, QUARTER_CIRCLE_RADIUS_M, RECT_CATALOG } from '../../domain/panels';
 import { mirrorTriangleCornerDiagonal, nextTriangleCorner, quarterCirclePath, triangleHand, trianglePoints } from '../../domain/triangle';
 import type { TriangleCorner } from '../../domain/types';
@@ -610,6 +610,18 @@ export function PieceCanvasEditor({
     setSelectedIds([]);
   }
 
+  // Kopiert die Auswahl als Block nach rechts (erste freie Stelle). Ein set()-Aufruf = ein Undo-Schritt;
+  // die Auswahl bleibt beim Original, so baut wiederholtes Strg+D eine Reihe.
+  function duplicateSelected() {
+    if (selectedIds.length === 0) return;
+    const copy = duplicateWithOffset(pieces, selectedIds);
+    if (!copy) {
+      showBlockedMessage('Kein freier Platz zum Duplizieren gefunden.');
+      return;
+    }
+    onAddPieces(copy);
+  }
+
   const canShiftLeft = pieces.length > 0 && shiftPieces(pieces, -GRID_STEP_M) !== null;
 
   function shiftAll(dx: number) {
@@ -667,6 +679,8 @@ export function PieceCanvasEditor({
       onRedo?.();
       return;
     }
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') { e.preventDefault(); arm(null); setSelectedIds(pieces.map((p) => p.id)); return; }
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSelected(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length > 0) {
       e.preventDefault();
@@ -765,6 +779,7 @@ export function PieceCanvasEditor({
         >
           ⤾ Drehen
         </button>
+        <button type="button" onClick={duplicateSelected} disabled={selectedIds.length === 0} title="Duplizieren (Strg/Cmd+D)" className={ACTION_BTN}>⧉ Duplizieren</button>
         {((armed?.kind === 'triangle' && armed.w !== armed.d) || (selectedPiece?.corner !== undefined && selectedPiece.w !== selectedPiece.d)) && (
           <button type="button" onClick={mirrorCurrent} title="Spiegeln — wechselt links/rechts" className={ACTION_BTN}>
             ⇋ Spiegeln
@@ -1126,6 +1141,12 @@ export function PieceCanvasEditor({
           </li>
           <li>
             <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+Z</kbd> Rückgängig
+          </li>
+          <li>
+            <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+A</kbd> alles auswählen
+          </li>
+          <li>
+            <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+D</kbd> Auswahl duplizieren (rechts daneben)
           </li>
           <li>
             <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+Umschalt+Z</kbd> oder

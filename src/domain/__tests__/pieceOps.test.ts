@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { addFilledPieces, checkGroupMove, movePieceTo, movePiecesBy, removePieceById, removePiecesByIds, rotatePieceById } from '../pieceOps';
+import { addFilledPieces, checkGroupMove, duplicateWithOffset, movePieceTo, movePiecesBy, removePieceById, removePiecesByIds, rotatePieceById } from '../pieceOps';
 import type { Piece2D } from '../customShape';
 
 describe('pieceOps', () => {
@@ -221,6 +221,65 @@ describe('pieceOps', () => {
     it('erlaubt einen Schritt von 1 m auf eine freie Fläche', () => {
       const single: Piece2D[] = [{ id: 'a', x: 0, y: 0, w: 1, d: 1 }];
       expect(checkGroupMove(single, ['a'], 1, 0)).toBe('ok');
+    });
+  });
+
+  describe('duplicateWithOffset', () => {
+    it('kopiert ein Stück um seine Breite nach rechts', () => {
+      const pieces: Piece2D[] = [{ id: 'a', x: 0, y: 0, w: 2, d: 1 }];
+      const result = duplicateWithOffset(pieces, ['a']);
+      expect(result).toEqual([{ x: 2, y: 0, w: 2, d: 1 }]);
+    });
+
+    it('springt zur nächsten freien Stelle, wenn rechts belegt ist', () => {
+      const pieces: Piece2D[] = [
+        { id: 'a', x: 0, y: 0, w: 2, d: 1 },
+        { id: 'b', x: 2, y: 0, w: 2, d: 1 },
+      ];
+      const result = duplicateWithOffset(pieces, ['a']);
+      expect(result).toEqual([{ x: 4, y: 0, w: 2, d: 1 }]);
+    });
+
+    it('verschiebt eine Mehrfachauswahl als Block mit relativer Anordnung', () => {
+      const pieces: Piece2D[] = [
+        { id: 'a', x: 0, y: 0, w: 1, d: 1 },
+        { id: 'c', x: 0, y: 1, w: 2, d: 1 },
+      ];
+      const result = duplicateWithOffset(pieces, ['a', 'c']);
+      expect(result).toEqual([
+        { x: 2, y: 0, w: 1, d: 1 },
+        { x: 2, y: 1, w: 2, d: 1 },
+      ]);
+    });
+
+    it('behält corner bei Dreiecken und setzt keine corner/shape-Schlüssel bei Rechtecken', () => {
+      const triangle: Piece2D[] = [{ id: 't', x: 0, y: 0, w: 1, d: 1, corner: 'tl' }];
+      const tri = duplicateWithOffset(triangle, ['t']);
+      expect(tri![0].corner).toBe('tl');
+
+      const rect: Piece2D[] = [{ id: 'r', x: 0, y: 0, w: 2, d: 1 }];
+      const rec = duplicateWithOffset(rect, ['r']);
+      expect('corner' in rec![0]).toBe(false);
+      expect('shape' in rec![0]).toBe(false);
+    });
+
+    it('übernimmt keine id in die Kopie', () => {
+      const pieces: Piece2D[] = [{ id: 'a', x: 0, y: 0, w: 2, d: 1 }];
+      const result = duplicateWithOffset(pieces, ['a']);
+      expect('id' in result![0]).toBe(false);
+    });
+
+    it('ergibt null bei leerer Auswahl', () => {
+      const pieces: Piece2D[] = [{ id: 'a', x: 0, y: 0, w: 2, d: 1 }];
+      expect(duplicateWithOffset(pieces, [])).toBeNull();
+    });
+
+    it('ergibt null, wenn innerhalb von maxSteps nichts frei ist', () => {
+      const pieces: Piece2D[] = [
+        { id: 'a', x: 0, y: 0, w: 2, d: 1 },
+        { id: 'b', x: 2, y: 0, w: 2, d: 1 },
+      ];
+      expect(duplicateWithOffset(pieces, ['a'], 1)).toBeNull();
     });
   });
 });
