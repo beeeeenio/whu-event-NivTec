@@ -1396,20 +1396,6 @@ export function PieceCanvasEditor({
           </>
         }
       />
-      {selectedPiece && onReplaceAll && (
-        <PieceInspector
-          key={selectedPiece.id}
-          piece={selectedPiece}
-          onApply={(edit) => {
-            const r = validatePieceEdit(pieces, selectedPiece.id, edit);
-            if (!r.ok) return r.reason;
-            // Ohne Änderung keine neue Rückgängig-Stufe.
-            if (r.pieces !== pieces) onReplaceAll(r.pieces);
-            return null;
-          }}
-          onRotate={rotateSelected}
-        />
-      )}
       {blockedMessage && (
         <div role="status" className="rounded-md border border-[var(--color-danger)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-danger)]">
           {blockedMessage}
@@ -1684,6 +1670,22 @@ export function PieceCanvasEditor({
         </div>
       )}
       </div>
+
+      {/* Unter dem Plan statt darüber: das Auftauchen beim Auswählen (schon beim Pointerdown) darf den Plan nicht unter Finger/Maus verschieben. */}
+      {selectedPiece && onReplaceAll && (
+        <PieceInspector
+          key={selectedPiece.id}
+          piece={selectedPiece}
+          onApply={(edit) => {
+            const r = validatePieceEdit(pieces, selectedPiece.id, edit);
+            if (!r.ok) return r.reason;
+            // Ohne Änderung keine neue Rückgängig-Stufe.
+            if (r.pieces !== pieces) onReplaceAll(r.pieces);
+            return null;
+          }}
+          onRotate={rotateSelected}
+        />
+      )}
 
       <PiecePalette armed={armed} hint="Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil. Beim Ziehen zeigen Hilfslinien Fluchten, Abstände und das Gesamtmaß in m. Alt gedrückt halten: frei platzieren, ohne Einrasten. Auf dem Tablet: ein Finger auf freier Fläche scrollt die Seite, zwei Finger zoomen und verschieben den Plan." {...paletteCallbacks} />
 
