@@ -12,6 +12,7 @@ import { mirrorTriangleCornerDiagonal, nextTriangleCorner, quarterCirclePath, tr
 import type { TriangleCorner } from '../../domain/types';
 import { formatMeters } from '../../lib/format';
 import { dragThresholdPx, isPrimaryButton, shouldRotateOnWheel } from '../../lib/pointer';
+import { isEditableTarget, undoRedoAction } from '../../lib/shortcuts';
 
 type ToolPayload = { kind: 'piece'; w: number; d: number } | { kind: 'triangle'; corner: TriangleCorner; w: number; d: number } | { kind: 'viertelkreis'; corner: TriangleCorner };
 
@@ -659,24 +660,15 @@ export function PieceCanvasEditor({
   // Pfeiltasten bewegen die Auswahl (Umschalt = 1 m, blockiert mit Meldung) oder — bei bewaffnetem
   // Werkzeug — einen Tastatur-Cursor (dieselbe pointerPos,
   // die auch die Maus-Vorschau treibt), Enter/Leertaste platziert dort. R dreht, Entf/Rücktaste
-  // entfernt, Esc bricht ab. 1–4 wählen die Plattengrößen in derselben Reihenfolge wie die
-  // Segmented-Control, T bewaffnet das Dreieckpodest.
+  // entfernt, Esc bricht ab. 1–4 wählen die Plattengrößen in derselben Reihenfolge wie die Rechteck-Kacheln der Palette (2 / 1,5 / 1 / 0,5 m),
+  // T bewaffnet das Dreieckpodest.
+  // Undo/Redo behandelt handleEditorKeyDown am Container, damit es auch nach Klick auf Palette/Toolbar wirkt.
   function handleCanvasKeyDown(e: React.KeyboardEvent<SVGSVGElement>) {
+    if (e.nativeEvent.isComposing) return;
     if (e.key === 'Escape') {
       setDrag(null);
       setPaletteDrag(null);
       arm(null);
-      return;
-    }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
-      e.preventDefault();
-      if (e.shiftKey) onRedo?.();
-      else onUndo?.();
-      return;
-    }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') {
-      e.preventDefault();
-      onRedo?.();
       return;
     }
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') { e.preventDefault(); arm(null); setSelectedIds(pieces.map((p) => p.id)); return; }
@@ -684,7 +676,7 @@ export function PieceCanvasEditor({
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length > 0) {
       e.preventDefault();
-      removeSelected();
+      if (!e.repeat) removeSelected();
       return;
     }
     if (e.key.toLowerCase() === 'r' && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -740,8 +732,19 @@ export function PieceCanvasEditor({
     }
   }
 
+  // Undo/Redo am Container: greift auch, wenn der Fokus auf Palette-Kachel oder Toolbar-Button liegt.
+  // Eingabefelder behalten ihr natives Undo; IME-Eingaben werden ignoriert.
+  function handleEditorKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (isEditableTarget(e.target)) return;
+    const action = undoRedoAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey, altKey: e.altKey, isComposing: e.nativeEvent.isComposing });
+    if (!action) return;
+    e.preventDefault();
+    if (action === 'undo') onUndo?.();
+    else onRedo?.();
+  }
+
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" onKeyDown={handleEditorKeyDown}>
       <div
         role="toolbar"
         aria-label="Aktionen"
@@ -766,7 +769,7 @@ export function PieceCanvasEditor({
           </button>
         )}
         {onRedo && (
-          <button type="button" onClick={onRedo} disabled={!canRedo} title="Wiederholen (Strg/Cmd+Umschalt+Z)" aria-label="Wiederholen" className={ACTION_BTN}>
+          <button type="button" onClick={onRedo} disabled={!canRedo} title="Wiederholen (Strg/Cmd+Umschalt+Z oder Strg+Y)" aria-label="Wiederholen" className={ACTION_BTN}>
             ↷
           </button>
         )}
