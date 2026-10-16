@@ -53,9 +53,10 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
     spindelHeightCm: SPINDEL_HEIGHT_OPTIONS_CM[1],
     basePieces: [],
     topPieces: [],
+    annotations: [],
   });
   const { set: setDoc, undo, redo, canUndo, canRedo, transact } = doc;
-  const { baseHeightCm, spindelHeightCm, basePieces, topPieces, room } = doc.value;
+  const { baseHeightCm, spindelHeightCm, basePieces, topPieces, room, annotations } = doc.value;
   const setBaseHeightCm = (v: number) => doc.set((d) => setDocField(d, 'baseHeightCm', v));
   const setSpindelHeightCm = (v: number) => doc.set((d) => setDocField(d, 'spindelHeightCm', v));
 
@@ -185,6 +186,7 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
       basePieces: v.basePieces,
       topPieces: v.topPieces,
       room: v.room,
+      annotations: v.annotations ?? [],
     }));
     return null;
   }
@@ -198,6 +200,7 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
     basePieces,
     topPieces,
     ...(room ? { room } : {}),
+    ...(annotations.length > 0 ? { annotations } : {}),
   };
   const { restored, discard, saveError, otherTabChanged, reloadFromOtherTab, dismissOtherTab } = useDraftAutosave(
     'tresen',
@@ -237,6 +240,7 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
                   basePieces: [],
                   topPieces: [],
                   room: undefined,
+                  annotations: [],
                 });
               }}
               className="shrink-0 text-xs underline"

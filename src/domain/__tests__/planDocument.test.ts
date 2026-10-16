@@ -7,7 +7,7 @@ import { applyChange, createHistory, undoHistory } from '../../lib/history';
 const piece = (id: string, x: number): Piece2D => ({ id, x, y: 0, w: 1, d: 1 });
 
 function makeDoc(): KastenbuehneDoc {
-  return { heightCm: 60, pieces: [piece('a', 0)], forexPanels: [] };
+  return { heightCm: 60, pieces: [piece('a', 0)], forexPanels: [], annotations: [] };
 }
 
 describe('setDocField', () => {

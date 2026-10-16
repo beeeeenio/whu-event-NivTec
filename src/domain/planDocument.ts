@@ -1,6 +1,7 @@
 import type { Piece2D } from './customShape';
 import type { ForexPanel } from './types';
 import type { RoomPlan } from './room';
+import type { PlanAnnotation } from './annotations';
 
 /**
  * Gemeinsames Dokument einer Kastenbühne — liegt als Ganzes in EINER Undo-Historie, damit Höhe,
@@ -12,6 +13,8 @@ export interface KastenbuehneDoc {
   forexPanels: ForexPanel[];
   /** Optional — Raumkontur mit Hindernissen; nur der Editor nutzt sie (Grundriss, 3D und Export nicht). */
   room?: RoomPlan;
+  /** Notizen, Symbole und Messlinien — rein werkzeuginterne Beschriftung, Start leer. */
+  annotations: PlanAnnotation[];
 }
 
 /** Gemeinsames Dokument eines Tresens — beide Ebenen und beide Höhen teilen sich eine Undo-Historie. */
@@ -25,6 +28,8 @@ export interface TresenDoc {
    * Boden, sondern auf dem Unterbau, daher wird sie nicht gegen den Raum geprüft.
    */
   room?: RoomPlan;
+  /** Notizen, Symbole und Messlinien — rein werkzeuginterne Beschriftung, Start leer. */
+  annotations: PlanAnnotation[];
 }
 
 /**

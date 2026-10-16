@@ -6,6 +6,7 @@ import { FOREX_SIDES, isTrianglePiece, pieceHasSide } from './forex';
 import { sanitizeRoom, type RoomPlan } from './room';
 import { migratePlan, type PlanKind } from './migrations';
 import type { ForexPanel, ForexSide, PieceShape, TriangleCorner } from './types';
+import { sanitizeAnnotations, type PlanAnnotation } from './annotations';
 
 /**
  * Gespeicherter Zustand einer Kastenbühne — wird als JSON exportiert/importiert.
@@ -20,6 +21,8 @@ export interface KastenbuehneSavedState {
   forexPanels?: ForexPanel[];
   /** Optional — Raumkontur mit Hindernissen; ältere Dateien ohne Raum laden weiter. */
   room?: RoomPlan;
+  /** Optional — Notizen, Symbole und Messlinien; ältere Dateien ohne Notizen laden weiter. */
+  annotations?: PlanAnnotation[];
 }
 
 /**
@@ -35,6 +38,8 @@ export interface TresenSavedState {
   topPieces: Piece2D[];
   /** Optional — Raumkontur mit Hindernissen; ältere Dateien ohne Raum laden weiter. */
   room?: RoomPlan;
+  /** Optional — Notizen, Symbole und Messlinien; ältere Dateien ohne Notizen laden weiter. */
+  annotations?: PlanAnnotation[];
 }
 
 const VALID_CORNERS: readonly TriangleCorner[] = ['tl', 'tr', 'bl', 'br'];
@@ -192,6 +197,19 @@ function readRoom(obj: Record<string, unknown>, warnings: string[]): RoomPlan | 
 }
 
 /**
+ * Liest die optionalen Notizen einer Datei. Fehlt das Feld, passiert nichts. Verworfene Einträge
+ * kommen als Warnung. Eine leere Liste wird nicht übernommen (Datei ohne Notizen bleibt wie bisher).
+ */
+function readAnnotations(obj: Record<string, unknown>, warnings: string[]): PlanAnnotation[] | undefined {
+  if (!('annotations' in obj)) return undefined;
+  const report = sanitizeAnnotations(obj.annotations);
+  if (report.dropped > 0) {
+    warnings.push(`${report.dropped} ungültige Notizen/Symbole verworfen.`);
+  }
+  return report.annotations.length > 0 ? report.annotations : undefined;
+}
+
+/**
  * Validiert und parsed eine Kastenbühne-Datei — prüft ob sie wirklich eine Bühne ist
  * (nicht versehentlich ein Tresen), und ob sie die notwendigen Felder hat.
  */
@@ -267,10 +285,11 @@ export function parseKastenbuehneFile(data: unknown): ParseResult<KastenbuehneSa
   }
 
   const room = readRoom(obj, warnings);
+  const annotations = readAnnotations(obj, warnings);
 
   return {
     ok: true,
-    value: { heightCm, pieces, forexPanels, ...(room ? { room } : {}) },
+    value: { heightCm, pieces, forexPanels, ...(room ? { room } : {}), ...(annotations ? { annotations } : {}) },
     warnings,
   };
 }
@@ -356,10 +375,18 @@ export function parseTresenFile(data: unknown): ParseResult<TresenSavedState> {
   }
 
   const room = readRoom(obj, warnings);
+  const annotations = readAnnotations(obj, warnings);
 
   return {
     ok: true,
-    value: { baseHeightCm, spindelHeightCm, basePieces, topPieces, ...(room ? { room } : {}) },
+    value: {
+      baseHeightCm,
+      spindelHeightCm,
+      basePieces,
+      topPieces,
+      ...(room ? { room } : {}),
+      ...(annotations ? { annotations } : {}),
+    },
     warnings,
   };
 }

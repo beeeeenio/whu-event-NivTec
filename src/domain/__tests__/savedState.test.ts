@@ -505,3 +505,69 @@ describe('savedState', () => {
     });
   });
 });
+
+describe('savedState Notizen (annotations)', () => {
+  const annotations = [
+    { id: 'an-1', kind: 'text', x: 1, y: 2, text: 'Ausgang' },
+    { id: 'an-2', kind: 'symbol', symbol: 'treppe', x: 3, y: 0 },
+    { id: 'an-3', kind: 'measure', x1: 0, y1: 0, x2: 3, y2: 4 },
+  ];
+
+  it('Bühne: Datei mit annotations lädt im Roundtrip', () => {
+    const result = parseKastenbuehneFile({
+      heightCm: 60,
+      pieces: [{ id: 'piece-1', x: 0, y: 0, w: 2, d: 1 }],
+      annotations,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.annotations).toEqual(annotations);
+      expect(result.warnings).toEqual([]);
+    }
+  });
+
+  it('Tresen: Datei mit annotations lädt im Roundtrip', () => {
+    const result = parseTresenFile({
+      basePieces: [{ id: 'piece-1', x: 0, y: 0, w: 2, d: 1 }],
+      topPieces: [],
+      annotations,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.annotations).toEqual(annotations);
+    }
+  });
+
+  it('ohne annotations ist das Feld nicht im value', () => {
+    const result = parseKastenbuehneFile({ heightCm: 60, pieces: [] });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect('annotations' in result.value).toBe(false);
+    }
+  });
+
+  it('leere annotations-Liste wird nicht in den value übernommen', () => {
+    const result = parseTresenFile({ basePieces: [], topPieces: [], annotations: [] });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect('annotations' in result.value).toBe(false);
+      expect(result.warnings).toEqual([]);
+    }
+  });
+
+  it('ungültige Notizen ergeben eine Warnung mit Anzahl und werden verworfen', () => {
+    const result = parseKastenbuehneFile({
+      heightCm: 60,
+      pieces: [],
+      annotations: [
+        { id: 'an-1', kind: 'text', x: 1, y: 1, text: 'ok' },
+        { id: 'an-2', kind: 'text', x: 1, y: 1, text: '   ' },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.annotations).toHaveLength(1);
+      expect(result.warnings).toContain('1 ungültige Notizen/Symbole verworfen.');
+    }
+  });
+});

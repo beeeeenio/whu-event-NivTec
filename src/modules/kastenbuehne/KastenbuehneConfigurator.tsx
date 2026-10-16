@@ -56,9 +56,10 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
     heightCm: STRUCTURE_RULES.buehne.heightOptionsCm[0],
     pieces: [],
     forexPanels: [],
+    annotations: [],
   });
   const { set: setDoc, undo, redo, canUndo, canRedo, transact } = doc;
-  const { heightCm, pieces, forexPanels, room } = doc.value;
+  const { heightCm, pieces, forexPanels, room, annotations } = doc.value;
   const setHeightCm = (v: number) => doc.set((d) => setDocField(d, 'heightCm', v));
   const setForexPanels = (u: ForexPanel[] | ((p: ForexPanel[]) => ForexPanel[])) =>
     doc.set((d) => setDocField(d, 'forexPanels', u));
@@ -174,6 +175,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
       pieces: v.pieces,
       forexPanels: v.forexPanels ?? [],
       room: v.room,
+      annotations: v.annotations ?? [],
     }));
     return null;
   }
@@ -186,6 +188,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
     pieces,
     ...(activeForexPanels.length > 0 ? { forexPanels: activeForexPanels } : {}),
     ...(room ? { room } : {}),
+    ...(annotations.length > 0 ? { annotations } : {}),
   };
 
   function handleToggleForex(pieceId: string, side: ForexSide) {
@@ -218,7 +221,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
               type="button"
               onClick={() => {
                 discard();
-                doc.set({ heightCm: STRUCTURE_RULES.buehne.heightOptionsCm[0], pieces: [], forexPanels: [], room: undefined });
+                doc.set({ heightCm: STRUCTURE_RULES.buehne.heightOptionsCm[0], pieces: [], forexPanels: [], room: undefined, annotations: [] });
                 setForexPrints({});
               }}
               className="shrink-0 text-xs underline"
