@@ -300,6 +300,8 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
         <PieceCanvasEditor
           {...baseEditorProps}
           room={room}
+          annotations={annotations}
+          onAnnotationsChange={(a) => setDoc((d) => setDocField(d, 'annotations', a))}
           frontEdgeLabel="Unterbau-Vorderkante"
           minCanvasWidthM={sharedCanvasWidthM}
           referenceFootprint={topBoundingBox ? { ...topBoundingBox, label: 'Thekenplatte' } : undefined}

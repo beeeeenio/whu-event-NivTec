@@ -281,6 +281,8 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
         <PieceCanvasEditor
           {...editorProps}
           room={room}
+          annotations={annotations}
+          onAnnotationsChange={(a) => setDoc((d) => setDocField(d, 'annotations', a))}
           frontEdgeLabel="Vorderkante"
           emptyHint={
             <div className="mt-2 flex flex-wrap gap-1.5">

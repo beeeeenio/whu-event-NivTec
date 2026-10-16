@@ -46,6 +46,8 @@ import { ZoomControls } from './editor/ZoomControls';
 import type { DragState, PaletteDragState } from './editor/types';
 import { usePointerDrag } from '../../hooks/usePointerDrag';
 import { pruneSelection } from '../../lib/pieceLayerProps';
+import { addAnnotation, removeAnnotation, SYMBOL_LABELS, type PlanAnnotation, type SymbolKind } from '../../domain/annotations';
+import { AnnotationLayer } from './editor/AnnotationLayer';
 
 /** Rahmenauswahl in Metern (Start- und aktueller Punkt); additive = Umschalt beim Start, erweitert die Auswahl. */
 interface MarqueeState {
@@ -102,7 +104,17 @@ interface Props {
   referenceFootprint?: { x: number; y: number; widthM: number; depthM: number; label?: string };
   /** Raumkontur mit Hindernissen; Hindernisse und Außenbereich gelten als belegt. */
   room?: RoomPlan;
+  /** Notizen, Symbole und Messlinien; ohne onAnnotationsChange nur Anzeige, ohne Beschriften-Menü. */
+  annotations?: PlanAnnotation[];
+  /** Ein Aufruf je Änderung — der Aufrufer legt sie in seine Undo-Historie. */
+  onAnnotationsChange?: (next: PlanAnnotation[]) => void;
 }
+
+/** Aktives Beschriften-Werkzeug: Messlinie, Textnotiz oder ein Symbol. null = keins. */
+type AnnoTool = 'measure' | 'text' | { symbol: SymbolKind };
+const SYMBOL_KINDS: SymbolKind[] = ['treppe', 'foh', 'notausgang'];
+/** Maximale Länge einer Textnotiz (wie TEXT_MAX_LENGTH in domain/annotations.ts). */
+const ANNO_TEXT_MAX = 200;
 
 const PAD = 0.6;
 const MIN_CANVAS_WIDTH_M = 6;
@@ -143,6 +155,11 @@ function round1(v: number): number {
   return Math.round(v * 10) / 10;
 }
 
+/** Beschriftungspunkte auf 0,05 m runden, nie negativ. */
+function snapAnnoM(v: number): number {
+  return Math.max(0, Math.round(v * 20) / 20);
+}
+
 const QUICK_WIDTHS = [2, 1.5, 1, 0.5] as const;
 
 /** Breite der schwebenden Aktionsleiste in px (für das Einklemmen am rechten Rand). */
@@ -181,6 +198,8 @@ export function PieceCanvasEditor({
   minCanvasWidthM,
   referenceFootprint,
   room,
+  annotations,
+  onAnnotationsChange,
 }: Props) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const svgRef = useRef<SVGSVGElement>(null);
@@ -203,6 +222,11 @@ export function PieceCanvasEditor({
   // Alt gedrückt beim Platzieren: freie Lage ohne Einrasten, Überlappung wird rot angezeigt.
   const [altHeld, setAltHeld] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Beschriften: aktives Werkzeug, Startpunkt einer laufenden Messung, Zeiger für die Vorschau und gewählte Notiz.
+  const [annoTool, setAnnoTool] = useState<AnnoTool | null>(null);
+  const [measureStart, setMeasureStart] = useState<{ x: number; y: number } | null>(null);
+  const [annoPointer, setAnnoPointer] = useState<{ x: number; y: number } | null>(null);
+  const [selectedAnnoId, setSelectedAnnoId] = useState<string | null>(null);
   // Eigene Bausteine (localStorage, gilt für Kastenbühne und Tresen); liegen nie in der Plan-Datei.
   const [blocks, setBlocks] = useState<SavedBlock[]>(() => listBlocks());
   // Beide Tresen-Ebenen (und andere Tabs) sehen neu gespeicherte oder gelöschte Bausteine sofort.
@@ -295,6 +319,91 @@ export function PieceCanvasEditor({
     setSelectedId(null);
     setPointerPos(null);
     setMoveMode(false);
+    // Jedes Werkzeug (auch Stück-Bewaffnen und Abbrechen) beendet das Beschriften.
+    setAnnoTool(null);
+    setMeasureStart(null);
+    setAnnoPointer(null);
+  }
+
+  // Auswahl einer Notiz endet, sobald Stücke ausgewählt werden — beim Rendern nachgezogen statt per Effect.
+  const [selectionSeen, setSelectionSeen] = useState(selectedIds);
+  if (selectionSeen !== selectedIds) {
+    setSelectionSeen(selectedIds);
+    if (selectedIds.length > 0) setSelectedAnnoId(null);
+  }
+
+  // Beschriften: Esc bricht ab, auch wenn der Fokus gerade nicht auf dem Plan liegt (z. B. im Auswahlmenü).
+  const annoActive = annoTool !== null;
+  useEffect(() => {
+    if (!annoActive) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setAnnoTool(null);
+      setMeasureStart(null);
+      setAnnoPointer(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [annoActive]);
+
+  // Notizen aus dem Aufrufer (leer, wenn keine übergeben ist) und die gerade gewählte Notiz; eine verschwundene ID zählt als nicht gewählt.
+  const annoList = annotations ?? [];
+  const selectedAnno = annoList.find((a) => a.id === selectedAnnoId) ?? null;
+  const annoSelectValue = annoTool === null ? '' : typeof annoTool === 'string' ? annoTool : `symbol:${annoTool.symbol}`;
+
+  // Auswahl im Beschriften-Menü: setzt das Werkzeug und beendet ein laufendes Platzieren von Stücken.
+  function chooseAnnoTool(value: string) {
+    arm(null);
+    setSelectedAnnoId(null);
+    if (value === 'measure' || value === 'text') setAnnoTool(value);
+    else if (value.startsWith('symbol:')) setAnnoTool({ symbol: value.slice('symbol:'.length) as SymbolKind });
+  }
+
+  // Klick auf die Fläche mit aktivem Werkzeug: Notiz, Symbol bzw. Messpunkt anlegen. Nach dem Anlegen ist das Werkzeug aus.
+  function handleAnnoToolClick(clientX: number, clientY: number) {
+    if (!annoTool || !onAnnotationsChange) return;
+    const raw = svgPointFromClient(clientX, clientY);
+    const p = { x: snapAnnoM(raw.x), y: snapAnnoM(raw.y) };
+    if (annoTool === 'text') {
+      setAnnoTool(null);
+      const text = (window.prompt('Notiz', '') ?? '').trim().slice(0, ANNO_TEXT_MAX);
+      if (text) onAnnotationsChange(addAnnotation(annoList, { kind: 'text', x: p.x, y: p.y, text }));
+      return;
+    }
+    if (annoTool === 'measure') {
+      if (!measureStart) {
+        setMeasureStart(p);
+        return;
+      }
+      setAnnoTool(null);
+      setMeasureStart(null);
+      setAnnoPointer(null);
+      if (p.x !== measureStart.x || p.y !== measureStart.y) {
+        onAnnotationsChange(addAnnotation(annoList, { kind: 'measure', x1: measureStart.x, y1: measureStart.y, x2: p.x, y2: p.y }));
+      }
+      return;
+    }
+    setAnnoTool(null);
+    onAnnotationsChange(addAnnotation(annoList, { kind: 'symbol', symbol: annoTool.symbol, x: p.x, y: p.y }));
+  }
+
+  // Vorschau der Messlinie vom Startpunkt zum Zeiger (nur während einer laufenden Messung).
+  const measurePreview: PlanAnnotation | null =
+    annoTool === 'measure' && measureStart && annoPointer
+      ? { id: 'vorschau', kind: 'measure', x1: measureStart.x, y1: measureStart.y, x2: snapAnnoM(annoPointer.x), y2: snapAnnoM(annoPointer.y) }
+      : null;
+
+  // Ausgewählte Notiz entfernen (Entf oder Schalter "Notiz entfernen"); ein Undo-Schritt über den Aufrufer.
+  function removeSelectedAnno() {
+    if (!selectedAnno || !onAnnotationsChange) return;
+    onAnnotationsChange(removeAnnotation(annoList, selectedAnno.id));
+    setSelectedAnnoId(null);
+  }
+
+  // Klick auf eine Notiz (ohne aktives Werkzeug) wählt sie aus und hebt die Stück-Auswahl auf.
+  function selectAnno(id: string) {
+    setSelectedIds([]);
+    setSelectedAnnoId(id);
   }
 
   // Ein laufender Timer wird vor jedem neuen Hinweis verworfen, damit die zweite Meldung
@@ -896,6 +1005,7 @@ export function PieceCanvasEditor({
       if (!cur) return;
       // Klick ohne Bewegung auf leerer Fläche: Auswahl aufheben (mit Umschalt bleibt sie).
       if (!s.moved) {
+        setSelectedAnnoId(null);
         if (!cur.additive) setSelectedIds([]);
         return;
       }
@@ -952,12 +1062,13 @@ export function PieceCanvasEditor({
 
   function handleTouchDown(e: React.PointerEvent<SVGSVGElement>) {
     touchPointsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    const onPiece = (e.target as Element).closest('[data-pce-piece]') !== null;
+    // Notizen zählen wie Stücke: Antippen wählt sie aus, statt die Seite zu scrollen.
+    const onPiece = (e.target as Element).closest('[data-pce-piece], [data-pce-anno]') !== null;
     const intent = touchGestureIntent({
       touchCount: touchPointsRef.current.size,
       onPiece,
-      // Im Verschieben-Modus wirkt Antippen wie beim bewaffneten Werkzeug: kein Scrollen, Tap ist das Ziel.
-      armed: !!armed || moveMode,
+      // Im Verschieben-Modus und mit Beschriften-Werkzeug wirkt Antippen wie beim bewaffneten Werkzeug: kein Scrollen, Tap ist das Ziel.
+      armed: !!armed || moveMode || annoTool !== null,
       zoomed: view !== null,
     });
     if (intent === 'pinch') {
@@ -1023,7 +1134,10 @@ export function PieceCanvasEditor({
       touchTapRef.current = null;
       // Tippen ohne Bewegung auf leerer Fläche hebt die Auswahl auf (auch gezoomt, wo der Finger sonst verschiebt).
       const tap = Math.hypot(e.clientX - tapStart.startX, e.clientY - tapStart.startY) < TAP_SLOP_PX;
-      if (!cancelled && tap) setSelectedIds([]);
+      if (!cancelled && tap) {
+        setSelectedIds([]);
+        setSelectedAnnoId(null);
+      }
     }
     if (pinchRef.current) {
       if (points.size < 2) {
@@ -1240,6 +1354,12 @@ export function PieceCanvasEditor({
       if (frozenBaseRef.current === null) setView(null);
       return;
     }
+    // Entf/Rücktaste: zuerst eine gewählte Notiz, sonst die gewählten Stücke.
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAnno && onAnnotationsChange) {
+      e.preventDefault();
+      if (!e.repeat) removeSelectedAnno();
+      return;
+    }
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length > 0) {
       e.preventDefault();
       if (!e.repeat) removeSelected();
@@ -1380,6 +1500,12 @@ export function PieceCanvasEditor({
 
   // Statuszeile der Toolbar: sagt, was gerade passiert bzw. was als Nächstes zu tun ist.
   function statusText(): string {
+    if (annoTool) {
+      if (annoTool === 'measure') return measureStart ? 'Zweiten Messpunkt antippen. Esc bricht ab.' : 'Ersten Messpunkt antippen. Esc bricht ab.';
+      if (annoTool === 'text') return 'Stelle für die Notiz antippen. Esc bricht ab.';
+      return `Stelle für das Symbol ${SYMBOL_LABELS[annoTool.symbol]} antippen. Esc bricht ab.`;
+    }
+    if (selectedAnno) return 'Notiz ausgewählt – Entf löscht sie.';
     return moveMode
       ? 'Ziel antippen – die Auswahl wird mit ihrer linken oberen Ecke dorthin gesetzt. Esc bricht ab.'
       : armed
@@ -1412,7 +1538,7 @@ export function PieceCanvasEditor({
   const selectionBounds = selectedRects.length > 1 ? unionBounds(selectedRects) : null;
 
   // Schwebende Aktionsleiste: nur bei Auswahl und ohne laufendes Ziehen, Werkzeug oder Rahmen.
-  const barVisible = selectedIds.length > 0 && !drag?.moved && !armed && !moveMode && !paletteDrag && !marquee;
+  const barVisible = selectedIds.length > 0 && !drag?.moved && !armed && !moveMode && !paletteDrag && !marquee && annoTool === null;
   const showMirrorSelected = selectedPiece?.corner !== undefined && selectedPiece.w !== selectedPiece.d;
   const canRotateSelection = !!selectedPiece || (selectedIds.length > 1 && !!onReplaceAll);
   const barActions: SelectionAction[] = [
@@ -1482,6 +1608,30 @@ export function PieceCanvasEditor({
         onToggleMultiSelect={() => setMultiSelect((v) => !v)}
         extra={
           <>
+            {onAnnotationsChange && (
+              <>
+                <select
+                  aria-label="Beschriften"
+                  value={annoSelectValue}
+                  onChange={(e) => chooseAnnoTool(e.target.value)}
+                  className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-sm text-[var(--color-text)]"
+                >
+                  <option value="">— Beschriften —</option>
+                  <option value="measure">Messen</option>
+                  <option value="text">Text</option>
+                  {SYMBOL_KINDS.map((k) => (
+                    <option key={k} value={`symbol:${k}`}>
+                      Symbol: {SYMBOL_LABELS[k]}
+                    </option>
+                  ))}
+                </select>
+                {selectedAnno && (
+                  <button type="button" onClick={removeSelectedAnno} className={ACTION_BTN}>
+                    Notiz entfernen
+                  </button>
+                )}
+              </>
+            )}
             {moveMode && (
               <button type="button" onClick={() => setMoveMode(false)} className={ACTION_BTN}>
                 Verschieben abbrechen
@@ -1596,7 +1746,7 @@ export function PieceCanvasEditor({
           style={{ cursor: armed ? 'copy' : 'default' }}
         />
         {/* Leere Fläche: Rahmen aufziehen (Maus/Stift) bzw. Klick hebt die Auswahl auf. Liegt unter den Stücken. */}
-        {!armed && !paletteDrag && !spaceHeld && (
+        {!armed && !paletteDrag && !spaceHeld && annoTool === null && (
           <rect
             x={0}
             y={0}
@@ -1718,6 +1868,15 @@ export function PieceCanvasEditor({
           </g>
         )}
 
+        {/* Notizen, Symbole, Messlinien: Ebene über den Stücken. Anklickbar nur ohne Werkzeug und ohne Ziehen. */}
+        <AnnotationLayer
+          annotations={measurePreview ? [...annoList, measurePreview] : annoList}
+          selectedId={selectedAnno?.id ?? null}
+          px={metersPerPx}
+          interactive={!!onAnnotationsChange && !armed && annoTool === null && !paletteDrag && !spaceHeld}
+          onSelect={selectAnno}
+        />
+
         <DragOverlay
           pieces={shownPieces}
           selectedIds={selectedIds}
@@ -1729,6 +1888,21 @@ export function PieceCanvasEditor({
           px={metersPerPx}
         />
 
+        {/* Beschriften: Klick legt Notiz, Symbol bzw. Messpunkt an. Liegt über allem, damit der Klick nicht an einem Stück hängenbleibt. */}
+        {annoTool !== null && onAnnotationsChange && (
+          <rect
+            x={0}
+            y={0}
+            width={canvasWidthM}
+            height={canvasDepthM}
+            fill="transparent"
+            pointerEvents="all"
+            onPointerMove={(e) => setAnnoPointer(svgPointFromClient(e.clientX, e.clientY))}
+            onPointerLeave={() => setAnnoPointer(null)}
+            onClick={(e) => handleAnnoToolClick(e.clientX, e.clientY)}
+            style={{ cursor: 'crosshair' }}
+          />
+        )}
         {/* Verschieben-Modus: Ziel antippen. Liegt über den Stücken, damit das Antippen das Ziel trifft und nicht das Stück. */}
         {moveMode && (
           <rect
