@@ -43,6 +43,8 @@ type ResultTab = 'kennzahlen' | 'grundriss' | '3d' | 'material';
 
 export function TresenConfigurator({ ci }: { ci: CiId }) {
   const [resultTab, setResultTab] = useState<ResultTab>('kennzahlen');
+  // Maßketten im Grundriss und in der PPTX (Standard: an).
+  const [showPlanDims, setShowPlanDims] = useState(true);
   const { onCanvasReady, getCanvas } = useExportCanvas(() => setResultTab('3d'));
 
   // Ein Dokument, eine Undo-Historie für beide Ebenen und beide Höhen: Undo macht den letzten
@@ -408,14 +410,32 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
                 </button>
               ))}
             </div>
+            <label className="flex items-center gap-1.5 text-sm text-[var(--color-text)]">
+              <input type="checkbox" checked={showPlanDims} onChange={(e) => setShowPlanDims(e.target.checked)} />
+              Maßketten
+            </label>
             <ExportButtons
               materialList={materialList}
               getCanvas={getCanvas}
               filenamePrefix="tresen"
               pptx={{
+                // Der Tresen normalisiert seine Ebenen nicht, die Notizen liegen also schon in den richtigen Koordinaten.
                 sections: [
-                  { layout: baseLayout, feet: baseLabeledFeet, heightCm: baseHeightCm, label: 'Unterbau' },
-                  { layout: topLayout, feet: topLabeledFeet, heightCm: spindelHeightCm, label: 'Thekenplatte (oben)' },
+                  {
+                    layout: baseLayout,
+                    feet: baseLabeledFeet,
+                    heightCm: baseHeightCm,
+                    label: 'Unterbau',
+                    showDimensions: showPlanDims,
+                    annotations,
+                  },
+                  {
+                    layout: topLayout,
+                    feet: topLabeledFeet,
+                    heightCm: spindelHeightCm,
+                    label: 'Thekenplatte (oben)',
+                    showDimensions: showPlanDims,
+                  },
                 ],
                 title: 'Tresen',
                 ci,
@@ -448,6 +468,7 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
                   feet={baseLabeledFeet}
                   heightCm={baseHeightCm}
                   minWidthM={Math.max(baseLayout.widthM, topLayout.widthM)}
+                  showDimensions={showPlanDims}
                 />
               </div>
               <div>
@@ -457,6 +478,7 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
                   feet={topLabeledFeet}
                   heightCm={spindelHeightCm}
                   minWidthM={Math.max(baseLayout.widthM, topLayout.widthM)}
+                  showDimensions={showPlanDims}
                 />
               </div>
             </div>

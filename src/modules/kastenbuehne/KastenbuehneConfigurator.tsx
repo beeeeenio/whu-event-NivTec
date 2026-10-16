@@ -12,7 +12,8 @@ import { SavedConfigsPanel } from '../../components/shared/SavedConfigsPanel';
 import { StairsRampCalculator } from '../../components/shared/StairsRampCalculator';
 import { SummaryStats } from '../../components/shared/SummaryStats';
 import { WarningBanner } from '../../components/shared/WarningBanner';
-import { buildLayoutFromPieces, makePieceId, normalizeToOrigin } from '../../domain/customShape';
+import { boundingBoxOf, buildLayoutFromPieces, makePieceId, normalizeToOrigin } from '../../domain/customShape';
+import { shiftAnnotations } from '../../domain/annotations';
 import { obstaclesOverlapping, piecesOutsideRoom } from '../../domain/room';
 import {
   addAllFrontEdges,
@@ -48,6 +49,8 @@ type ResultTab = 'kennzahlen' | 'grundriss' | '3d' | 'material';
 
 export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
   const [resultTab, setResultTab] = useState<ResultTab>('kennzahlen');
+  // Maßketten im Grundriss und in der PPTX (Standard: an).
+  const [showPlanDims, setShowPlanDims] = useState(true);
   const { onCanvasReady, getCanvas } = useExportCanvas(() => setResultTab('3d'));
 
   // Ein Dokument, eine Undo-Historie: Höhe, Stücke und Forex-Blenden. Import und "Verwerfen" sind
@@ -81,6 +84,12 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
   // Editor selbst bekommt weiter die echten Positionen.
   const normalizedPieces = useMemo(() => normalizeToOrigin(pieces), [pieces]);
   const layout = useMemo(() => buildLayoutFromPieces(normalizedPieces), [normalizedPieces]);
+  // Notizen liegen in den Koordinaten der Zeichenfläche; für den Export um dieselbe Verschiebung
+  // wie die normalisierten Stücke zurücksetzen, sonst säßen sie neben der Fläche.
+  const exportAnnotations = useMemo(() => {
+    const origin = boundingBoxOf(pieces);
+    return origin ? shiftAnnotations(annotations, -origin.x, -origin.y) : annotations;
+  }, [pieces, annotations]);
 
   // Forex-Blenden hängen per pieceId an einer Kante. Liegt dort (nach Verschieben/Löschen) kein
   // freies Podest mehr, fallen sie aus 3D, Materialliste und Export heraus.
@@ -359,12 +368,25 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
                 </button>
               ))}
             </div>
+            <label className="flex items-center gap-1.5 text-sm text-[var(--color-text)]">
+              <input type="checkbox" checked={showPlanDims} onChange={(e) => setShowPlanDims(e.target.checked)} />
+              Maßketten
+            </label>
             <ExportButtons
               materialList={materialList}
               getCanvas={getCanvas}
               filenamePrefix="kastenbuehne"
               pptx={{
-                sections: [{ layout, feet: labeledFeet, heightCm, label: 'Kastenbühne' }],
+                sections: [
+                  {
+                    layout,
+                    feet: labeledFeet,
+                    heightCm,
+                    label: 'Kastenbühne',
+                    showDimensions: showPlanDims,
+                    annotations: exportAnnotations,
+                  },
+                ],
                 title: 'Kastenbühne',
                 ci,
               }}
@@ -383,7 +405,9 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
           )}
 
           {(resultTab === 'grundriss' || resultTab === '3d') && <FootColorLegend heights={[heightCm]} />}
-          {resultTab === 'grundriss' && <FloorPlanSVG layout={layout} feet={labeledFeet} heightCm={heightCm} />}
+          {resultTab === 'grundriss' && (
+            <FloorPlanSVG layout={layout} feet={labeledFeet} heightCm={heightCm} showDimensions={showPlanDims} />
+          )}
           {/* AufbauScene3D bleibt unabhängig vom aktiven Tab immer gemountet — der PNG-Export
               braucht die live WebGL-Canvas-Referenz, die beim Unmounten verloren ginge. */}
           <div className={resultTab === '3d' ? '' : 'hidden'}>

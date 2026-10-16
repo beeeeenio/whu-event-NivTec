@@ -48,7 +48,10 @@ export function ExportButtons({ materialList, getCanvas, filenamePrefix, pptx }:
     if (!pptx) return;
     if (pptx.sections.length === 1) {
       const s = pptx.sections[0];
-      await exportLayoutAsPptx(s.layout, s.feet, s.heightCm, `${filenamePrefix}-grundriss.pptx`, pptx.ci, pptx.title);
+      await exportLayoutAsPptx(s.layout, s.feet, s.heightCm, `${filenamePrefix}-grundriss.pptx`, pptx.ci, pptx.title, {
+        showDimensions: s.showDimensions,
+        annotations: s.annotations,
+      });
     } else {
       await exportSectionsAsPptx(pptx.sections, `${filenamePrefix}-grundriss.pptx`, pptx.ci, pptx.title);
     }

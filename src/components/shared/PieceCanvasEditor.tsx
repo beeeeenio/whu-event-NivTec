@@ -48,6 +48,7 @@ import { usePointerDrag } from '../../hooks/usePointerDrag';
 import { pruneSelection } from '../../lib/pieceLayerProps';
 import { addAnnotation, removeAnnotation, SYMBOL_LABELS, type PlanAnnotation, type SymbolKind } from '../../domain/annotations';
 import { AnnotationLayer } from './editor/AnnotationLayer';
+import { DimensionChains } from './DimensionChains';
 
 /** Rahmenauswahl in Metern (Start- und aktueller Punkt); additive = Umschalt beim Start, erweitert die Auswahl. */
 interface MarqueeState {
@@ -115,6 +116,8 @@ type AnnoTool = 'measure' | 'text' | { symbol: SymbolKind };
 const SYMBOL_KINDS: SymbolKind[] = ['treppe', 'foh', 'notausgang'];
 /** Maximale Länge einer Textnotiz (wie TEXT_MAX_LENGTH in domain/annotations.ts). */
 const ANNO_TEXT_MAX = 200;
+/** localStorage-Schlüssel für den Maßketten-Schalter ('1' = an). */
+const SHOW_DIMS_STORAGE_KEY = 'nivtec:showDims';
 
 const PAD = 0.6;
 const MIN_CANVAS_WIDTH_M = 6;
@@ -227,6 +230,23 @@ export function PieceCanvasEditor({
   const [measureStart, setMeasureStart] = useState<{ x: number; y: number } | null>(null);
   const [annoPointer, setAnnoPointer] = useState<{ x: number; y: number } | null>(null);
   const [selectedAnnoId, setSelectedAnnoId] = useState<string | null>(null);
+  // Maßketten (Außen- und Segmentmaße) dauerhaft einblenden; die Wahl bleibt pro Browser erhalten.
+  const [showDims, setShowDims] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(SHOW_DIMS_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  function toggleShowDims() {
+    const next = !showDims;
+    setShowDims(next);
+    try {
+      localStorage.setItem(SHOW_DIMS_STORAGE_KEY, next ? '1' : '0');
+    } catch {
+      // Speicher gesperrt (z. B. privates Fenster): die Anzeige gilt trotzdem für diese Sitzung.
+    }
+  }
   // Eigene Bausteine (localStorage, gilt für Kastenbühne und Tresen); liegen nie in der Plan-Datei.
   const [blocks, setBlocks] = useState<SavedBlock[]>(() => listBlocks());
   // Beide Tresen-Ebenen (und andere Tabs) sehen neu gespeicherte oder gelöschte Bausteine sofort.
@@ -1608,6 +1628,15 @@ export function PieceCanvasEditor({
         onToggleMultiSelect={() => setMultiSelect((v) => !v)}
         extra={
           <>
+            <button
+              type="button"
+              onClick={toggleShowDims}
+              aria-pressed={showDims}
+              title="Maßketten ein/aus"
+              className={`${ACTION_BTN} ${showDims ? 'border-[var(--color-accent)] text-[var(--color-accent)]' : ''}`}
+            >
+              Maße
+            </button>
             {onAnnotationsChange && (
               <>
                 <select
@@ -1866,6 +1895,11 @@ export function PieceCanvasEditor({
               {selectedRects.length} Stücke · {formatMeters(selectionBounds.w)} × {formatMeters(selectionBounds.d)} m
             </text>
           </g>
+        )}
+
+        {/* Maßketten: dauerhaft eingeblendet (Schalter "Maße"); während des Ziehens zeigen die Smart Guides die Maße. */}
+        {showDims && pieces.length > 0 && !drag?.moved && (
+          <DimensionChains rects={pieces} offsetM={18 * metersPerPx} fontSizeM={11 * metersPerPx} strokeWidthM={metersPerPx} />
         )}
 
         {/* Notizen, Symbole, Messlinien: Ebene über den Stücken. Anklickbar nur ohne Werkzeug und ohne Ziehen. */}
