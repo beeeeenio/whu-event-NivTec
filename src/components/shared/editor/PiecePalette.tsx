@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { QUARTER_CIRCLE_RADIUS_M, RECT_CATALOG } from '../../../domain/panels';
-import { payloadMatches, type ToolPayload } from '../../../domain/toolPayload';
+import { payloadMatches, payloadSize, type ToolPayload } from '../../../domain/toolPayload';
 import { PieceShape, type ShapeGeometry } from './PieceShape';
 
 const fmtDim = (v: number) => String(Math.round(v * 100) / 100).replace('.', ',');
@@ -44,6 +44,14 @@ const GALLERY_GROUPS: { title: string; tiles: GalleryTile[] }[] = [
   },
 ];
 
+/** Eigener Baustein in der Palette: Name, Nutzlast und Löschen-Aktion (vom Editor per useMemo stabil übergeben). */
+export interface PaletteBlock {
+  payload: ToolPayload;
+  key: string;
+  label: string;
+  onDelete: () => void;
+}
+
 export interface PiecePaletteProps {
   armed: ToolPayload | null;
   onTilePointerDown: (e: React.PointerEvent<HTMLButtonElement>, payload: ToolPayload) => void;
@@ -52,6 +60,64 @@ export interface PiecePaletteProps {
   onTileCancel: () => void;
   onTileClick: (payload: ToolPayload, isArmed: boolean) => void;
   hint: string;
+  /** Eigene Bausteine (Gruppe „Eigene Bausteine“); fehlt die Prop, gibt es keine Gruppe. */
+  blocks?: PaletteBlock[];
+}
+
+type TileHandlers = Pick<PiecePaletteProps, 'onTilePointerDown' | 'onTilePointerMove' | 'onTilePointerUp' | 'onTileCancel' | 'onTileClick'>;
+
+/** Anzeige einer Kachel: Stücke im Mini-SVG, Maße in m für die Skalierung, Namen für Screenreader und Hinweis. */
+interface TileView {
+  key: string;
+  label: string;
+  payload: ToolPayload;
+  shapes: ShapeGeometry[];
+  box: { w: number; d: number };
+  scale: number;
+  name: string;
+  title: string;
+}
+
+/** Eine Kachel mit Klick-Bewaffnen und Ziehen aus der Kachel auf den Plan (Maus und Touch). */
+function PaletteTile({ view, armed, handlers }: { view: TileView; armed: ToolPayload | null; handlers: TileHandlers }) {
+  const isArmed = payloadMatches(armed, view.payload);
+  const { box, scale } = view;
+  return (
+    <button
+      type="button"
+      onPointerDown={(e) => handlers.onTilePointerDown(e, view.payload)}
+      onPointerMove={handlers.onTilePointerMove}
+      onPointerUp={handlers.onTilePointerUp}
+      onPointerCancel={handlers.onTileCancel}
+      onLostPointerCapture={handlers.onTileCancel}
+      onClick={() => handlers.onTileClick(view.payload, isArmed)}
+      aria-pressed={isArmed}
+      aria-label={`${view.name} ${isArmed ? 'ausgewählt' : 'auswählen'}, oder direkt auf den Plan ziehen`}
+      title={view.title}
+      className={`flex min-w-[3.25rem] cursor-pointer select-none touch-none flex-col items-center gap-1 rounded-md border px-2 py-1.5 ${
+        isArmed
+          ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-contrast)]'
+          : 'border-[var(--color-panel-stroke)] bg-[var(--color-surface)] text-[var(--color-text)] hover:border-[var(--color-accent)]'
+      }`}
+    >
+      <span className="flex h-[52px] items-end">
+        <svg width={box.w * scale + 4} height={box.d * scale + 4} viewBox={`-0.08 -0.08 ${box.w + 0.16} ${box.d + 0.16}`} aria-hidden>
+          {view.shapes.map((s, i) => (
+            <PieceShape
+              key={i}
+              piece={s}
+              fill={isArmed ? 'rgba(255,255,255,0.35)' : 'var(--color-panel-fill)'}
+              stroke={isArmed ? 'currentColor' : 'var(--color-panel-stroke)'}
+              strokeWidth={0.06}
+            />
+          ))}
+        </svg>
+      </span>
+      <span className="text-[11px] leading-none" style={{ fontFamily: 'var(--font-mono)' }}>
+        {view.label}
+      </span>
+    </button>
+  );
 }
 
 /** Palette der Stückkacheln: Klick bewaffnet, Ziehen aus der Kachel auf den Plan (Maus und Touch).
@@ -64,7 +130,9 @@ export const PiecePalette = memo(function PiecePalette({
   onTileCancel,
   onTileClick,
   hint,
+  blocks = [],
 }: PiecePaletteProps) {
+  const handlers: TileHandlers = { onTilePointerDown, onTilePointerMove, onTilePointerUp, onTileCancel, onTileClick };
   return (
     <div className="space-y-2" style={{ fontFamily: 'var(--font-display)' }}>
       <p className="text-xs text-[var(--color-text-muted)]">
@@ -78,55 +146,67 @@ export const PiecePalette = memo(function PiecePalette({
           <span className="w-full text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
             {group.title}
           </span>
-          {group.tiles.map((tile) => {
-            const isArmed = payloadMatches(armed, tile.payload);
-            const g = tile.geometry;
-            const scale = 24;
-            return (
-              <button
-                key={tile.key}
-                type="button"
-                onPointerDown={(e) => onTilePointerDown(e, tile.payload)}
-                onPointerMove={onTilePointerMove}
-                onPointerUp={onTilePointerUp}
-                onPointerCancel={onTileCancel}
-                onLostPointerCapture={onTileCancel}
-                onClick={() => onTileClick(tile.payload, isArmed)}
-                aria-pressed={isArmed}
-                aria-label={`${group.title === 'Rechtecke' ? 'Stück' : group.title === 'Dreiecke' ? 'Dreieckpodest' : 'Viertelkreis'} ${tile.label} m ${isArmed ? 'ausgewählt' : 'auswählen'}, oder direkt auf den Plan ziehen`.trim()}
-                title={tile.payload.kind === 'viertelkreis' ? 'Viertelkreis, Radius 1 m' : `${tile.label} m`}
-                className={`flex min-w-[3.25rem] cursor-pointer select-none touch-none flex-col items-center gap-1 rounded-md border px-2 py-1.5 ${
-                  isArmed
-                    ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-contrast)]'
-                    : 'border-[var(--color-panel-stroke)] bg-[var(--color-surface)] text-[var(--color-text)] hover:border-[var(--color-accent)]'
-                }`}
-              >
-                <span className="flex h-[52px] items-end">
-                  <svg
-                    width={g.w * scale + 4}
-                    height={g.d * scale + 4}
-                    viewBox={`-0.08 -0.08 ${g.w + 0.16} ${g.d + 0.16}`}
-                    aria-hidden
-                  >
-                    <PieceShape
-                      piece={g}
-                      fill={isArmed ? 'rgba(255,255,255,0.35)' : 'var(--color-panel-fill)'}
-                      stroke={isArmed ? 'currentColor' : 'var(--color-panel-stroke)'}
-                      strokeWidth={0.06}
-                    />
-                  </svg>
-                </span>
-                <span className="text-[11px] leading-none" style={{ fontFamily: 'var(--font-mono)' }}>
-                  {tile.label}
-                </span>
-              </button>
-            );
-          })}
+          {group.tiles.map((tile) => (
+            <PaletteTile
+              key={tile.key}
+              armed={armed}
+              handlers={handlers}
+              view={{
+                key: tile.key,
+                label: tile.label,
+                payload: tile.payload,
+                shapes: [tile.geometry],
+                box: { w: tile.geometry.w, d: tile.geometry.d },
+                scale: 24,
+                name: `${group.title === 'Rechtecke' ? 'Stück' : group.title === 'Dreiecke' ? 'Dreieckpodest' : 'Viertelkreis'} ${tile.label} m`,
+                title: tile.payload.kind === 'viertelkreis' ? 'Viertelkreis, Radius 1 m' : `${tile.label} m`,
+              }}
+            />
+          ))}
         </div>
       ))}
       </div>
       ))}
       </div>
+      {blocks.length > 0 && (
+        <div className="flex flex-wrap items-end gap-x-3 gap-y-1.5">
+          <span className="w-full text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+            Eigene Bausteine
+          </span>
+          {blocks.map((b) => {
+            const box = payloadSize(b.payload);
+            const pieces = b.payload.kind === 'block' ? b.payload.pieces : [];
+            return (
+              <div key={b.key} className="flex items-start gap-0.5">
+                <PaletteTile
+                  armed={armed}
+                  handlers={handlers}
+                  view={{
+                    key: b.key,
+                    label: b.label,
+                    payload: b.payload,
+                    shapes: pieces,
+                    box,
+                    // Ein Baustein darf die Kachel nicht sprengen: höchstens 48 px hoch bzw. breit.
+                    scale: Math.min(24, 48 / Math.max(box.w, box.d, 0.01)),
+                    name: `Baustein ${b.label}`,
+                    title: `Baustein ${b.label}`,
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={b.onDelete}
+                  aria-label={`Baustein ${b.label} löschen`}
+                  title="Baustein löschen"
+                  className="cursor-pointer rounded px-1 text-sm leading-none text-[var(--color-text-muted)] hover:text-[var(--color-danger)]"
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 });

@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   findFreePosition,
+  fitsAllAt,
   fitsAt,
   makePieceId,
   placeUnsnapped,
@@ -23,7 +24,8 @@ import {
 import { alignmentGuides, nearestGaps, unionBounds, type Rect } from '../../domain/smartGuides';
 import { isSondermassPiece, TRIANGLE_PANEL_SIZE_M } from '../../domain/panels';
 import { triangleHand } from '../../domain/triangle';
-import { mirrorPayload, payloadMatches, payloadSize, payloadToFilled, rotatePayload, type ToolPayload } from '../../domain/toolPayload';
+import { mirrorPayload, payloadMatches, payloadSize, payloadToFilled, payloadToFilledPieces, rotatePayload, type ToolPayload } from '../../domain/toolPayload';
+import { deleteBlock, listBlocks, saveBlock, selectionToBlock, type SavedBlock } from '../../lib/blocks';
 import { formatMeters } from '../../lib/format';
 import { dragThresholdPx, isPrimaryButton, shouldRotateOnWheel, wheelIntent } from '../../lib/pointer';
 import { createFrameThrottle } from '../../lib/pointerDrag';
@@ -194,6 +196,17 @@ export function PieceCanvasEditor({
   // Alt gedrückt beim Platzieren: freie Lage ohne Einrasten, Überlappung wird rot angezeigt.
   const [altHeld, setAltHeld] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Eigene Bausteine (localStorage, gilt für Kastenbühne und Tresen); liegen nie in der Plan-Datei.
+  const [blocks, setBlocks] = useState<SavedBlock[]>(() => listBlocks());
+  // Stabile Liste für die memo-Palette: nur neu bauen, wenn sich die Bausteine ändern.
+  const paletteBlocks = useMemo(
+    () =>
+      blocks.map((b) => {
+        const payload: ToolPayload = { kind: 'block', label: b.name, pieces: b.pieces };
+        return { key: b.id, label: b.name, payload, onDelete: () => setBlocks(deleteBlock(b.id)) };
+      }),
+    [blocks],
+  );
   // Verschieben-Modus (Touch/Tastatur ohne Ziehen): danach wird das Ziel auf dem Plan angetippt.
   const [moveMode, setMoveMode] = useState(false);
   // Mehrfachauswahl per Antippen (Touch ohne Umschalttaste): Tippen fügt Stücke hinzu bzw. entfernt sie.
@@ -379,6 +392,13 @@ export function PieceCanvasEditor({
   // Cursor über dem Canvas ist) — eine einzige Vorschau-Quelle für beide Wege.
   function previewForPayload(payload: ToolPayload | null): (FilledPiece & { valid?: boolean })[] | null {
     if (!payload || !pointerPos) return null;
+    if (payload.kind === 'block') {
+      // Baustein: ohne Einrasten an Kanten, sondern als Ganzes am Anker; Kollision wird rot angezeigt.
+      const anchor = blockAnchor(payload, pointerPos, altHeld);
+      const filled = payloadToFilledPieces(payload, anchor.x, anchor.y);
+      const valid = fitsAllAt(pieces, filled);
+      return filled.map((f) => ({ ...f, valid }));
+    }
     const { w, d } = payloadSize(payload);
     if (altHeld) {
       const free = placeUnsnapped(pieces, w, d, pointerPos.x - w / 2, pointerPos.y - d / 2);
@@ -420,6 +440,17 @@ export function PieceCanvasEditor({
   // Logik, nur die Umrechnung von Bildschirm- zu Meter-Koordinaten unterscheidet sich).
   // free=true (Alt): ohne Einrasten an der freien Lage; liegt sie auf einem anderen Stück, wird nichts abgelegt.
   function commitPayloadAtPoint(payload: ToolPayload, pos: { x: number; y: number }, free = false) {
+    if (payload.kind === 'block') {
+      const anchor = blockAnchor(payload, pos, free);
+      const filled = payloadToFilledPieces(payload, anchor.x, anchor.y);
+      if (!fitsAllAt(pieces, filled)) {
+        showBlockedMessage('Dort ist kein Platz für den Baustein – nichts platziert.');
+        return;
+      }
+      // Ein Baustein ist ein einziger Schritt für Rückgängig, egal wie viele Stücke er hat.
+      onAddPieces(filled);
+      return;
+    }
     const { w, d } = payloadSize(payload);
     if (free) {
       const exact = placeUnsnapped(pieces, w, d, pos.x - w / 2, pos.y - d / 2);
@@ -436,6 +467,24 @@ export function PieceCanvasEditor({
 
   function commitPayloadAt(payload: ToolPayload, clientX: number, clientY: number, free = false) {
     commitPayloadAtPoint(payload, svgPointFromClient(clientX, clientY), free);
+  }
+
+  // Anker eines Bausteins: links/oben nie über 0, auf das 0,5-m-Raster gerastet; mit Alt auf cm statt Raster.
+  // Ohne findFreePosition: der Baustein sitzt genau dort, wo er gezeigt wird.
+  function blockAnchor(payload: ToolPayload, pos: { x: number; y: number }, fine: boolean): { x: number; y: number } {
+    const { w, d } = payloadSize(payload);
+    const snap = (v: number) => (fine ? Math.round(v * 100) / 100 : Math.round(v / GRID_STEP_M) * GRID_STEP_M);
+    return { x: Math.max(0, snap(pos.x - w / 2)), y: Math.max(0, snap(pos.y - d / 2)) };
+  }
+
+  // Eigener Baustein: die aktuelle Auswahl wird unter einem Namen gespeichert und erscheint in der Palette.
+  function saveSelectionAsBlock() {
+    const name = window.prompt('Name des Bausteins', `Baustein ${blocks.length + 1}`)?.trim();
+    if (!name) return;
+    const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Date.now().toString(36);
+    const block = selectionToBlock(pieces, selectedIds, name, id);
+    if (!block) return;
+    setBlocks(saveBlock(block));
   }
 
   function handlePaletteButtonPointerDown(e: React.PointerEvent<HTMLButtonElement>, payload: ToolPayload) {
@@ -1387,6 +1436,9 @@ export function PieceCanvasEditor({
                 Verschieben abbrechen
               </button>
             )}
+            <button type="button" onClick={saveSelectionAsBlock} disabled={selectedIds.length === 0} className={ACTION_BTN}>
+              Als Baustein speichern
+            </button>
             <ZoomControls
               zoomPercent={zoomPercent}
               onZoomIn={() => zoomByButton(1.25)}
@@ -1687,7 +1739,7 @@ export function PieceCanvasEditor({
         />
       )}
 
-      <PiecePalette armed={armed} hint="Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil. Beim Ziehen zeigen Hilfslinien Fluchten, Abstände und das Gesamtmaß in m. Alt gedrückt halten: frei platzieren, ohne Einrasten. Auf dem Tablet: ein Finger auf freier Fläche scrollt die Seite, zwei Finger zoomen und verschieben den Plan." {...paletteCallbacks} />
+      <PiecePalette armed={armed} blocks={paletteBlocks} hint="Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil. Beim Ziehen zeigen Hilfslinien Fluchten, Abstände und das Gesamtmaß in m. Alt gedrückt halten: frei platzieren, ohne Einrasten. Auf dem Tablet: ein Finger auf freier Fläche scrollt die Seite, zwei Finger zoomen und verschieben den Plan." {...paletteCallbacks} />
 
       <ShortcutHelp />
     </div>
