@@ -11,7 +11,7 @@ import {
   type PlacementOptions,
   type Piece2D,
 } from '../../domain/customShape';
-import { checkGroupMove, duplicateWithOffset, moveGroupTo, piecesInRect, rotateGroupAroundCenter, rotatePieceAroundCenter, snapGroupDelta, validatePieceEdit, type GroupMoveCheck } from '../../domain/pieceOps';
+import { checkGroupMove, duplicateWithOffset, moveGroupTo, piecesInRect, rotateGroupAroundCenter, rotatePieceAroundCenter, snapGroupDelta, validatePieceEdit, withoutLocked, type GroupMoveCheck } from '../../domain/pieceOps';
 import {
   getMemoryClipboard,
   makeClipboardPayload,
@@ -109,6 +109,8 @@ interface Props {
   annotations?: PlanAnnotation[];
   /** Ein Aufruf je Änderung — der Aufrufer legt sie in seine Undo-Historie. */
   onAnnotationsChange?: (next: PlanAnnotation[]) => void;
+  /** Ganze Ebene gesperrt: nur Ansicht (Zoom, Maße), keine Bearbeitung. Nur Ansichtszustand, nicht in der Plan-Datei. */
+  locked?: boolean;
 }
 
 /** Aktives Beschriften-Werkzeug: Messlinie, Textnotiz oder ein Symbol. null = keins. */
@@ -165,6 +167,14 @@ function snapAnnoM(v: number): number {
 
 const QUICK_WIDTHS = [2, 1.5, 1, 0.5] as const;
 
+/** Entfernt Sperr-IDs von Stücken, die es nicht mehr gibt; gleiche Referenz, wenn nichts wegfällt. */
+function pruneLocked(cur: Set<string>, pieces: readonly Piece2D[]): Set<string> {
+  if (cur.size === 0) return cur;
+  const existing = new Set(pieces.map((p) => p.id));
+  if ([...cur].every((id) => existing.has(id))) return cur;
+  return new Set([...cur].filter((id) => existing.has(id)));
+}
+
 /** Breite der schwebenden Aktionsleiste in px (für das Einklemmen am rechten Rand). */
 const SELECTION_BAR_WIDTH_PX = 240;
 /** Höhe der Aktionsleiste in px, für die Position über der Auswahl. */
@@ -203,7 +213,10 @@ export function PieceCanvasEditor({
   room,
   annotations,
   onAnnotationsChange,
+  locked = false,
 }: Props) {
+  // Gesperrte Ebene: Palette, Beschriften, Bausteine, Inspector und Ändern-Schalter entfallen; Zoom und Maße bleiben.
+  const editable = !locked;
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const svgRef = useRef<SVGSVGElement>(null);
   // Äußerer Container: Fokusprüfung für die Leertaste (Verschieben), siehe unten.
@@ -225,6 +238,8 @@ export function PieceCanvasEditor({
   // Alt gedrückt beim Platzieren: freie Lage ohne Einrasten, Überlappung wird rot angezeigt.
   const [altHeld, setAltHeld] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Gesperrte Stücke (nur Bearbeitungszustand): bleiben belegt, sind aber nicht auswähl- oder verschiebbar.
+  const [lockedIds, setLockedIds] = useState<Set<string>>(() => new Set());
   // Beschriften: aktives Werkzeug, Startpunkt einer laufenden Messung, Zeiger für die Vorschau und gewählte Notiz.
   const [annoTool, setAnnoTool] = useState<AnnoTool | null>(null);
   const [measureStart, setMeasureStart] = useState<{ x: number; y: number } | null>(null);
@@ -270,9 +285,24 @@ export function PieceCanvasEditor({
   if (selectionPiecesRef !== pieces) {
     setSelectionPiecesRef(pieces);
     setSelectedIds((cur) => pruneSelection(cur, pieces));
+    setLockedIds((cur) => pruneLocked(cur, pieces));
   }
   // Ohne Auswahl gibt es nichts zu verschieben: der Verschieben-Modus endet mit der Auswahl.
   if (moveMode && selectedIds.length === 0) setMoveMode(false);
+  // Ebene wird gesperrt: laufendes Platzieren, Verschieben, Beschriften und Auswahl enden (beim Rendern nachgezogen).
+  const [lockSeen, setLockSeen] = useState(editable);
+  if (lockSeen !== editable) {
+    setLockSeen(editable);
+    if (!editable) {
+      setArmedState(null);
+      setMoveMode(false);
+      setSelectedIds([]);
+      setAnnoTool(null);
+      setMeasureStart(null);
+      setAnnoPointer(null);
+      setSelectedAnnoId(null);
+    }
+  }
   // Einzelauswahl (Drehen/Spiegeln/Pfeiltasten) gilt nur bei genau einem ausgewählten Stück;
   // mit Umschalt+Klick lassen sich mehrere auswählen, die dann gemeinsam gelöscht werden.
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
@@ -1030,7 +1060,7 @@ export function PieceCanvasEditor({
         return;
       }
       const p = svgPointFromClient(e.clientX, e.clientY);
-      const ids = piecesInRect(pieces, { x: cur.x0, y: cur.y0, w: p.x - cur.x0, d: p.y - cur.y0 }, 'intersect');
+      const ids = withoutLocked(piecesInRect(pieces, { x: cur.x0, y: cur.y0, w: p.x - cur.x0, d: p.y - cur.y0 }, 'intersect'), lockedIds);
       setSelectedIds(cur.additive ? [...selectedIds, ...ids.filter((id) => !selectedIds.includes(id))] : ids);
     },
     onCancel: () => setMarquee(null),
@@ -1253,6 +1283,17 @@ export function PieceCanvasEditor({
     setSelectedIds([]);
   }
 
+  // Sperren: die Auswahl bleibt belegt, wird aber abgewählt und ist danach nicht mehr auswählbar oder verschiebbar.
+  function lockSelected() {
+    if (selectedIds.length === 0) return;
+    setLockedIds((cur) => new Set([...cur, ...selectedIds]));
+    setSelectedIds([]);
+  }
+
+  function unlockAll() {
+    setLockedIds(new Set());
+  }
+
   // Kopiert die Auswahl als Block nach rechts (erste freie Stelle). Ein Einfüge-Aufruf = ein Undo-Schritt.
   // Die Auswahl springt auf die Kopie, so baut wiederholtes Strg+D die Reihe nach rechts weiter.
   function duplicateSelected() {
@@ -1265,7 +1306,7 @@ export function PieceCanvasEditor({
     if (onInsertPieces) {
       const withIds = copy.map((p) => ({ ...p, id: makePieceId() }));
       onInsertPieces(withIds);
-      setSelectedIds(withIds.map((p) => p.id));
+      setSelectedIds(withoutLocked(withIds.map((p) => p.id), lockedIds));
       return;
     }
     onAddPieces(copy);
@@ -1374,6 +1415,8 @@ export function PieceCanvasEditor({
       if (frozenBaseRef.current === null) setView(null);
       return;
     }
+    // Gesperrte Ebene: alle ändernden Tasten ignorieren (Zoom, 0, Esc bleiben oben).
+    if (!editable) return;
     // Entf/Rücktaste: zuerst eine gewählte Notiz, sonst die gewählten Stücke.
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAnno && onAnnotationsChange) {
       e.preventDefault();
@@ -1438,6 +1481,8 @@ export function PieceCanvasEditor({
     if (isEditableTarget(e.target)) return;
     const action = editorShortcut({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey, altKey: e.altKey, isComposing: e.nativeEvent.isComposing });
     if (!action) return;
+    // Gesperrte Ebene: nur Kopieren bleibt (ändert nichts); Undo, Redo, Alles auswählen, Duplizieren, Ausschneiden und Einfügen entfallen.
+    if (!editable && action !== 'copy') return;
     if (action === 'undo' || action === 'redo') {
       e.preventDefault();
       if (action === 'undo') onUndo?.();
@@ -1447,7 +1492,7 @@ export function PieceCanvasEditor({
     if (action === 'selectAll') {
       e.preventDefault();
       arm(null);
-      setSelectedIds(pieces.map((p) => p.id));
+      setSelectedIds(pieces.filter((p) => !lockedIds.has(p.id)).map((p) => p.id));
       return;
     }
     if (action === 'duplicate') {
@@ -1481,6 +1526,7 @@ export function PieceCanvasEditor({
   // Fremder Text wird ignoriert, dann gilt die interne Zwischenablage.
   function handleEditorPaste(e: React.ClipboardEvent<HTMLDivElement>) {
     if (isEditableTarget(e.target)) return;
+    if (!editable) return;
     const text = e.clipboardData?.getData('text/plain') ?? '';
     const payload = parseClipboard(text) ?? getMemoryClipboard();
     if (!payload) return;
@@ -1499,7 +1545,7 @@ export function PieceCanvasEditor({
     if (onInsertPieces) {
       const withIds = placed.map((p) => ({ ...p, id: makePieceId() }));
       onInsertPieces(withIds);
-      setSelectedIds(withIds.map((p) => p.id));
+      setSelectedIds(withoutLocked(withIds.map((p) => p.id), lockedIds));
       return;
     }
     onAddPieces(placed);
@@ -1520,6 +1566,7 @@ export function PieceCanvasEditor({
 
   // Statuszeile der Toolbar: sagt, was gerade passiert bzw. was als Nächstes zu tun ist.
   function statusText(): string {
+    if (!editable) return 'Ebene gesperrt – zum Bearbeiten entsperren.';
     if (annoTool) {
       if (annoTool === 'measure') return measureStart ? 'Zweiten Messpunkt antippen. Esc bricht ab.' : 'Ersten Messpunkt antippen. Esc bricht ab.';
       if (annoTool === 'text') return 'Stelle für die Notiz antippen. Esc bricht ab.';
@@ -1558,7 +1605,7 @@ export function PieceCanvasEditor({
   const selectionBounds = selectedRects.length > 1 ? unionBounds(selectedRects) : null;
 
   // Schwebende Aktionsleiste: nur bei Auswahl und ohne laufendes Ziehen, Werkzeug oder Rahmen.
-  const barVisible = selectedIds.length > 0 && !drag?.moved && !armed && !moveMode && !paletteDrag && !marquee && annoTool === null;
+  const barVisible = editable && selectedIds.length > 0 && !drag?.moved && !armed && !moveMode && !paletteDrag && !marquee && annoTool === null;
   const showMirrorSelected = selectedPiece?.corner !== undefined && selectedPiece.w !== selectedPiece.d;
   const canRotateSelection = !!selectedPiece || (selectedIds.length > 1 && !!onReplaceAll);
   const barActions: SelectionAction[] = [
@@ -1603,29 +1650,30 @@ export function PieceCanvasEditor({
   });
   return (
     <div ref={containerRef} className="space-y-3" onKeyDown={handleEditorKeyDown} onPaste={handleEditorPaste}>
+      {/* Gesperrt: "Alles verschieben" und "Plan leeren" entfallen (piecesCount 0 blendet sie aus). */}
       <EditorToolbar
         statusText={statusText()}
         onUndo={onUndo}
         onRedo={onRedo}
-        canUndo={canUndo}
-        canRedo={canRedo}
-        canRotate={!!armed || !!selectedPiece || (selectedIds.length > 1 && !!onReplaceAll)}
+        canUndo={editable && canUndo}
+        canRedo={editable && canRedo}
+        canRotate={editable && (!!armed || !!selectedPiece || (selectedIds.length > 1 && !!onReplaceAll))}
         onRotate={rotateCurrent}
-        canDuplicate={selectedIds.length > 0}
+        canDuplicate={editable && selectedIds.length > 0}
         onDuplicate={duplicateSelected}
-        showMirror={(armed?.kind === 'triangle' && armed.w !== armed.d) || (selectedPiece?.corner !== undefined && selectedPiece.w !== selectedPiece.d)}
+        showMirror={editable && ((armed?.kind === 'triangle' && armed.w !== armed.d) || (selectedPiece?.corner !== undefined && selectedPiece.w !== selectedPiece.d))}
         onMirror={mirrorCurrent}
         removeCount={selectedIds.length}
         onRemove={removeSelected}
         cancelLabel={armed ? 'Abbrechen' : selectedIds.length > 0 ? 'Abwählen' : null}
         onCancel={() => (armed ? arm(null) : setSelectedIds([]))}
-        piecesCount={pieces.length}
+        piecesCount={editable ? pieces.length : 0}
         canShiftLeft={canShiftLeft}
         onShiftAll={shiftAll}
         shiftStepM={GRID_STEP_M}
-        onClear={onClear ? handleClear : undefined}
+        onClear={onClear && editable ? handleClear : undefined}
         multiSelect={multiSelect}
-        onToggleMultiSelect={() => setMultiSelect((v) => !v)}
+        onToggleMultiSelect={editable ? () => setMultiSelect((v) => !v) : undefined}
         extra={
           <>
             <button
@@ -1637,7 +1685,7 @@ export function PieceCanvasEditor({
             >
               Maße
             </button>
-            {onAnnotationsChange && (
+            {editable && onAnnotationsChange && (
               <>
                 <select
                   aria-label="Beschriften"
@@ -1666,9 +1714,26 @@ export function PieceCanvasEditor({
                 Verschieben abbrechen
               </button>
             )}
-            <button type="button" onClick={saveSelectionAsBlock} disabled={selectedIds.length === 0} className={ACTION_BTN}>
-              Als Baustein speichern
-            </button>
+            {editable && (
+              <button type="button" onClick={saveSelectionAsBlock} disabled={selectedIds.length === 0} className={ACTION_BTN}>
+                Als Baustein speichern
+              </button>
+            )}
+            {editable && selectedIds.length > 0 && (
+              <button
+                type="button"
+                onClick={lockSelected}
+                title="Auswahl sperren: bleibt im Plan belegt, lässt sich aber nicht mehr auswählen oder verschieben"
+                className={ACTION_BTN}
+              >
+                Sperren
+              </button>
+            )}
+            {lockedIds.size > 0 && (
+              <button type="button" onClick={unlockAll} className={ACTION_BTN}>
+                Alle entsperren ({lockedIds.size})
+              </button>
+            )}
             <ZoomControls
               zoomPercent={zoomPercent}
               onZoomIn={() => zoomByButton(1.25)}
@@ -1775,7 +1840,7 @@ export function PieceCanvasEditor({
           style={{ cursor: armed ? 'copy' : 'default' }}
         />
         {/* Leere Fläche: Rahmen aufziehen (Maus/Stift) bzw. Klick hebt die Auswahl auf. Liegt unter den Stücken. */}
-        {!armed && !paletteDrag && !spaceHeld && annoTool === null && (
+        {editable && !armed && !paletteDrag && !spaceHeld && annoTool === null && (
           <rect
             x={0}
             y={0}
@@ -1838,7 +1903,9 @@ export function PieceCanvasEditor({
           // Bei p.corner !== undefined (Dreieck) NIE isSondermassPiece(p.w,p.d) aufrufen — (1,1)
           // ist auch die Bounding-Box des echten 1×1-Rechtecks, das würde fälschlich matchen.
           const sondermass = p.corner === undefined && isSondermassPiece(p.w, p.d);
-          const interactive = !armed && !paletteDrag && !spaceHeld;
+          const isLocked = lockedIds.has(p.id);
+          // Gesperrt (einzelnes Stück oder ganze Ebene): sichtbar und belegt, aber ohne Zeigerereignisse.
+          const interactive = editable && !isLocked && !armed && !paletteDrag && !spaceHeld;
           // Hervorheben nur für nicht ausgewählte Stücke unter der Maus (Touch hat keinen Hover).
           const hovered = interactive && hoveredId === p.id && !selectedIds.includes(p.id);
           return (
@@ -1846,10 +1913,11 @@ export function PieceCanvasEditor({
               key={p.id}
               piece={{ ...p, shape: p.shape }}
               fill={sondermass ? `url(#pce-hatch-warning-${uid})` : `url(#pce-hatch-${uid})`}
-              fillOpacity={isDragTarget ? 0.25 : 1}
+              fillOpacity={isDragTarget ? 0.25 : isLocked ? 0.55 : 1}
               stroke={selectedIds.includes(p.id) || hovered ? 'var(--color-accent)' : 'var(--color-panel-stroke)'}
               strokeWidth={selectedIds.includes(p.id) ? 0.035 : hovered ? 0.025 : 0.02}
               strokeOpacity={hovered ? 0.6 : undefined}
+              strokeDasharray={isLocked ? `${2 * metersPerPx} ${2 * metersPerPx}` : undefined}
               pointerEvents={interactive ? 'all' : 'none'}
               style={{ cursor: !interactive ? 'default' : drag?.moved ? 'inherit' : 'grab' }}
               onPointerEnter={(e) => {
@@ -1864,6 +1932,7 @@ export function PieceCanvasEditor({
             >
               <title>
                 {formatMeters(p.w, 2)}×{formatMeters(p.d, 2)} m bei x={formatMeters(p.x, 2)}, y={formatMeters(p.y, 2)} m
+                {isLocked ? ' (gesperrt)' : ''}
               </title>
             </PieceShape>
           );
@@ -1907,7 +1976,7 @@ export function PieceCanvasEditor({
           annotations={measurePreview ? [...annoList, measurePreview] : annoList}
           selectedId={selectedAnno?.id ?? null}
           px={metersPerPx}
-          interactive={!!onAnnotationsChange && !armed && annoTool === null && !paletteDrag && !spaceHeld}
+          interactive={editable && !!onAnnotationsChange && !armed && annoTool === null && !paletteDrag && !spaceHeld}
           onSelect={selectAnno}
         />
 
@@ -1968,7 +2037,7 @@ export function PieceCanvasEditor({
           ⤾
         </button>
       )}
-      {pieces.length === 0 && !armed && !paletteDrag && (
+      {editable && pieces.length === 0 && !armed && !paletteDrag && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-4">
           <div className="pointer-events-auto max-w-sm rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]/95 p-3 text-sm shadow-sm">
             <p className="font-medium">Leerer Plan – so geht&apos;s</p>
@@ -1984,7 +2053,7 @@ export function PieceCanvasEditor({
       </div>
 
       {/* Unter dem Plan statt darüber: das Auftauchen beim Auswählen (schon beim Pointerdown) darf den Plan nicht unter Finger/Maus verschieben. */}
-      {selectedPiece && onReplaceAll && (
+      {editable && selectedPiece && onReplaceAll && (
         <PieceInspector
           key={selectedPiece.id}
           piece={selectedPiece}
@@ -1999,7 +2068,7 @@ export function PieceCanvasEditor({
         />
       )}
 
-      <PiecePalette armed={armed} blocks={paletteBlocks} hint="Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil. Beim Ziehen zeigen Hilfslinien Fluchten, Abstände und das Gesamtmaß in m. Alt gedrückt halten: frei platzieren, ohne Einrasten. Auf dem Tablet: ein Finger auf freier Fläche scrollt die Seite, zwei Finger zoomen und verschieben den Plan." {...paletteCallbacks} />
+      {editable && <PiecePalette armed={armed} blocks={paletteBlocks} hint="Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil. Beim Ziehen zeigen Hilfslinien Fluchten, Abstände und das Gesamtmaß in m. Alt gedrückt halten: frei platzieren, ohne Einrasten. Auf dem Tablet: ein Finger auf freier Fläche scrollt die Seite, zwei Finger zoomen und verschieben den Plan." {...paletteCallbacks} />}
 
       <ShortcutHelp />
     </div>

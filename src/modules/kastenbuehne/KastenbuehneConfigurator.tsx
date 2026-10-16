@@ -51,6 +51,9 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
   const [resultTab, setResultTab] = useState<ResultTab>('kennzahlen');
   // Maßketten im Grundriss und in der PPTX (Standard: an).
   const [showPlanDims, setShowPlanDims] = useState(true);
+  // Ansicht: Bühne sperren und Forex-Blenden ausblenden. Nicht in der Plan-Datei; Materialliste und Export bleiben vollständig.
+  const [stageLocked, setStageLocked] = useState(false);
+  const [forexHidden, setForexHidden] = useState(false);
   const { onCanvasReady, getCanvas } = useExportCanvas(() => setResultTab('3d'));
 
   // Ein Dokument, eine Undo-Historie: Höhe, Stücke und Forex-Blenden. Import und "Verwerfen" sind
@@ -260,7 +263,20 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-[var(--color-text)]">Aufbau per Drag & Drop</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-[var(--color-text)]">Aufbau per Drag & Drop</h2>
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => setStageLocked((v) => !v)}
+              aria-pressed={stageLocked}
+              title="Gesperrte Bühne: Stücke bleiben sichtbar, lassen sich aber nicht bearbeiten"
+              className={ACTION_BTN}
+            >
+              {stageLocked ? 'Bühne entsperren' : 'Bühne sperren'}
+            </button>
+          </div>
+        </div>
         <div className="flex flex-wrap items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5">
           <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Höhe</span>
           <HeightSelector heightOptionsCm={STRUCTURE_RULES.buehne.heightOptionsCm} valueCm={heightCm} onChange={setHeightCm} />
@@ -289,6 +305,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
         )}
         <PieceCanvasEditor
           {...editorProps}
+          locked={stageLocked}
           room={room}
           annotations={annotations}
           onAnnotationsChange={(a) => setDoc((d) => setDocField(d, 'annotations', a))}
@@ -314,19 +331,39 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
 
       {hasContent && (
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold text-[var(--color-text)]">Forex-Blenden</h2>
-          <ForexEdgeEditor
-            pieces={normalizedPieces}
-            forexPanels={activeForexPanels}
-            placed={placedForex}
-            prints={visiblePrints}
-            onToggle={handleToggleForex}
-            onUploadPrint={handleUploadPrint}
-            onRemovePrint={handleRemovePrint}
-            onSetPrintGroup={handleSetPrintGroup}
-            onAllFrontEdges={() => setForexPanels((prev) => addAllFrontEdges(normalizedPieces, prev))}
-            onClear={() => setForexPanels([])}
-          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold text-[var(--color-text)]">Forex-Blenden</h2>
+            <button
+              type="button"
+              onClick={() => setForexHidden((v) => !v)}
+              aria-pressed={forexHidden}
+              title="Blenden nur ausblenden: Materialliste und Export bleiben vollständig"
+              className={ACTION_BTN}
+            >
+              {forexHidden ? 'Forex-Blenden einblenden' : 'Forex-Blenden ausblenden'}
+            </button>
+          </div>
+          {forexHidden ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-muted)]">
+              <span>Forex-Blenden ausgeblendet. Sie bleiben in Materialliste und Export erhalten.</span>
+              <button type="button" onClick={() => setForexHidden(false)} className="text-xs underline text-[var(--color-accent)]">
+                Einblenden
+              </button>
+            </div>
+          ) : (
+            <ForexEdgeEditor
+              pieces={normalizedPieces}
+              forexPanels={activeForexPanels}
+              placed={placedForex}
+              prints={visiblePrints}
+              onToggle={handleToggleForex}
+              onUploadPrint={handleUploadPrint}
+              onRemovePrint={handleRemovePrint}
+              onSetPrintGroup={handleSetPrintGroup}
+              onAllFrontEdges={() => setForexPanels((prev) => addAllFrontEdges(normalizedPieces, prev))}
+              onClear={() => setForexPanels([])}
+            />
+          )}
         </section>
       )}
 
@@ -412,7 +449,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
               braucht die live WebGL-Canvas-Referenz, die beim Unmounten verloren ginge. */}
           <div className={resultTab === '3d' ? '' : 'hidden'}>
             <AufbauScene3D
-              tiers={[{ layout, feet: labeledFeet, heightM: heightCm / 100, forex: placedForex, forexPrints: visiblePrints }]}
+              tiers={[{ layout, feet: labeledFeet, heightM: heightCm / 100, forex: forexHidden ? [] : placedForex, forexPrints: visiblePrints }]}
               onCanvasReady={onCanvasReady}
             />
           </div>

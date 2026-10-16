@@ -41,10 +41,58 @@ const CANVAS_BUFFER_M = 2;
 
 type ResultTab = 'kennzahlen' | 'grundriss' | '3d' | 'material';
 
+/** Ansichtszustand einer Ebene: gesperrt = nur Ansicht, ausgeblendet = kein Editor und nicht in 3D. Nicht in der Plan-Datei. */
+interface LayerView {
+  locked: boolean;
+  hidden: boolean;
+}
+const NO_LAYER_VIEW: LayerView = { locked: false, hidden: false };
+
+/** Schalter Sperren/Ausblenden neben der Ebenen-Überschrift. */
+function LayerToggles({ view, onChange }: { view: LayerView; onChange: (next: LayerView) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <button
+        type="button"
+        onClick={() => onChange({ ...view, locked: !view.locked })}
+        aria-pressed={view.locked}
+        title="Gesperrte Ebene: Stücke bleiben sichtbar, lassen sich aber nicht bearbeiten"
+        className={ACTION_BTN}
+      >
+        {view.locked ? 'Entsperren' : 'Sperren'}
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange({ ...view, hidden: !view.hidden })}
+        aria-pressed={view.hidden}
+        title="Ausgeblendete Ebenen bleiben in Kennzahlen, Materialliste und Export vollständig"
+        className={ACTION_BTN}
+      >
+        {view.hidden ? 'Einblenden' : 'Ausblenden'}
+      </button>
+    </div>
+  );
+}
+
+/** Platzhalter für eine ausgeblendete Ebene: kein Editor, nur der Schalter zum Einblenden. */
+function LayerHidden({ label, onShow }: { label: string; onShow: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-muted)]">
+      <span>Ebene ausgeblendet ({label}). Stücke bleiben erhalten.</span>
+      <button type="button" onClick={onShow} className="text-xs underline text-[var(--color-accent)]">
+        Einblenden
+      </button>
+    </div>
+  );
+}
+
 export function TresenConfigurator({ ci }: { ci: CiId }) {
   const [resultTab, setResultTab] = useState<ResultTab>('kennzahlen');
   // Maßketten im Grundriss und in der PPTX (Standard: an).
   const [showPlanDims, setShowPlanDims] = useState(true);
+  // Sperren und Ausblenden je Ebene: Ansichtszustand, bewusst nicht in der Plan-Datei.
+  const [baseView, setBaseView] = useState<LayerView>(NO_LAYER_VIEW);
+  const [topView, setTopView] = useState<LayerView>(NO_LAYER_VIEW);
   const { onCanvasReady, getCanvas } = useExportCanvas(() => setResultTab('3d'));
 
   // Ein Dokument, eine Undo-Historie für beide Ebenen und beide Höhen: Undo macht den letzten
@@ -273,7 +321,10 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-[var(--color-text)]">Unterbau per Drag & Drop</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-[var(--color-text)]">Unterbau per Drag & Drop</h2>
+          <LayerToggles view={baseView} onChange={setBaseView} />
+        </div>
         <div className="flex flex-wrap items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5">
           <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Höhe</span>
           <HeightSelector heightOptionsCm={STRUCTURE_RULES.tresen.heightOptionsCm} valueCm={baseHeightCm} onChange={setBaseHeightCm} />
@@ -299,45 +350,55 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
             außerhalb des Raums.
           </WarningBanner>
         )}
-        <PieceCanvasEditor
-          {...baseEditorProps}
-          room={room}
-          annotations={annotations}
-          onAnnotationsChange={(a) => setDoc((d) => setDocField(d, 'annotations', a))}
-          frontEdgeLabel="Unterbau-Vorderkante"
-          minCanvasWidthM={sharedCanvasWidthM}
-          referenceFootprint={topBoundingBox ? { ...topBoundingBox, label: 'Thekenplatte' } : undefined}
-          emptyHint={
-            hasContent ? undefined : (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                <span className="w-full text-xs font-semibold">Oder mit einer Vorlage starten (Unterbau und Platte):</span>
-                {TRESEN_TEMPLATES.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={ACTION_BTN}
-                    onClick={() => {
-                      // Beide Ebenen in EINEM Schritt setzen — ein Undo macht die ganze Vorlage rückgängig.
-                      const { base, top } = t.build();
-                      doc.set((d) => ({
-                        ...d,
-                        basePieces: base.map((p) => ({ ...p, id: makePieceId() })),
-                        topPieces: top.map((p) => ({ ...p, id: makePieceId() })),
-                      }));
-                    }}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-            )
-          }
-        />
-        <PlacedPiecesChips pieces={basePieces} onRemovePiece={baseEditorProps.onRemovePiece} />
+        {baseView.hidden ? (
+          <LayerHidden label="Unterbau" onShow={() => setBaseView((v) => ({ ...v, hidden: false }))} />
+        ) : (
+          <>
+            <PieceCanvasEditor
+            {...baseEditorProps}
+            locked={baseView.locked}
+            room={room}
+            annotations={annotations}
+            onAnnotationsChange={(a) => setDoc((d) => setDocField(d, 'annotations', a))}
+            frontEdgeLabel="Unterbau-Vorderkante"
+            minCanvasWidthM={sharedCanvasWidthM}
+            referenceFootprint={topBoundingBox ? { ...topBoundingBox, label: 'Thekenplatte' } : undefined}
+            emptyHint={
+              hasContent ? undefined : (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <span className="w-full text-xs font-semibold">Oder mit einer Vorlage starten (Unterbau und Platte):</span>
+                  {TRESEN_TEMPLATES.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className={ACTION_BTN}
+                      onClick={() => {
+                        // Beide Ebenen in EINEM Schritt setzen — ein Undo macht die ganze Vorlage rückgängig.
+                        const { base, top } = t.build();
+                        doc.set((d) => ({
+                          ...d,
+                          basePieces: base.map((p) => ({ ...p, id: makePieceId() })),
+                          topPieces: top.map((p) => ({ ...p, id: makePieceId() })),
+                        }));
+                      }}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              )
+            }
+          />
+          <PlacedPiecesChips pieces={basePieces} onRemovePiece={baseEditorProps.onRemovePiece} />
+          </>
+        )}
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-[var(--color-text)]">Thekenplatte per Drag & Drop</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-[var(--color-text)]">Thekenplatte per Drag & Drop</h2>
+          <LayerToggles view={topView} onChange={setTopView} />
+        </div>
         <div className="space-y-2.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5">
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Spindelfuß-Ausgleich</span>
@@ -375,13 +436,20 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
             zeigt den aktuellen Unterbau zum Vergleich.
           </p>
         </div>
-        <PieceCanvasEditor
-          {...topEditorProps}
-          frontEdgeLabel="Thekenplatten-Vorderkante"
-          minCanvasWidthM={sharedCanvasWidthM}
-          referenceFootprint={baseBoundingBox ? { ...baseBoundingBox, label: 'Unterbau' } : undefined}
-        />
-        <PlacedPiecesChips pieces={topPieces} onRemovePiece={topEditorProps.onRemovePiece} />
+        {topView.hidden ? (
+          <LayerHidden label="Thekenplatte" onShow={() => setTopView((v) => ({ ...v, hidden: false }))} />
+        ) : (
+          <>
+            <PieceCanvasEditor
+              {...topEditorProps}
+              locked={topView.locked}
+              frontEdgeLabel="Thekenplatten-Vorderkante"
+              minCanvasWidthM={sharedCanvasWidthM}
+              referenceFootprint={baseBoundingBox ? { ...baseBoundingBox, label: 'Unterbau' } : undefined}
+            />
+            <PlacedPiecesChips pieces={topPieces} onRemovePiece={topEditorProps.onRemovePiece} />
+          </>
+        )}
       </section>
 
       {hasContent && (
@@ -487,20 +555,26 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
           {/* AufbauScene3D bleibt unabhängig vom aktiven Tab immer gemountet — der PNG-Export
               braucht die live WebGL-Canvas-Referenz, die beim Unmounten verloren ginge. */}
           <div className={resultTab === '3d' ? '' : 'hidden'}>
+            {/* Ausgeblendete Ebenen fehlen hier, bleiben aber als Referenz-Umriss im Editor der anderen Ebene. */}
             <AufbauScene3D
               tiers={[
-                { layout: baseLayout, feet: baseLabeledFeet, heightM: baseHeightCm / 100, panelColor: '#2c3e6b' },
-                {
-                  layout: topLayout,
-                  feet: topLabeledFeet,
-                  heightM: spindelHeightCm / 100,
-                  baseY: topBaseY,
-                  offsetZ,
-                  panelColor: '#c08a00',
-                },
+                ...(baseView.hidden ? [] : [{ layout: baseLayout, feet: baseLabeledFeet, heightM: baseHeightCm / 100, panelColor: '#2c3e6b' }]),
+                ...(topView.hidden
+                  ? []
+                  : [
+                      {
+                        layout: topLayout,
+                        feet: topLabeledFeet,
+                        heightM: spindelHeightCm / 100,
+                        baseY: topBaseY,
+                        offsetZ,
+                        panelColor: '#c08a00',
+                      },
+                    ]),
               ]}
               onCanvasReady={onCanvasReady}
             />
+            {baseView.hidden && topView.hidden && <p className="mt-2 text-sm text-[var(--color-text-muted)]">Alle Ebenen sind ausgeblendet.</p>}
           </div>
 
           {resultTab === 'material' && <MaterialListTable items={materialList} />}

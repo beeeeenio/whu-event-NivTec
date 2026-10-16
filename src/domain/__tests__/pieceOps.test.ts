@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { addFilledPieces, checkGroupMove, duplicateWithOffset, moveGroupTo, movePieceTo, movePiecesBy, piecesInRect, removePieceById, removePiecesByIds, rotateGroupAroundCenter, rotatePieceAroundCenter, rotatePieceById, snapGroupDelta, validatePieceEdit } from '../pieceOps';
+import { addFilledPieces, checkGroupMove, duplicateWithOffset, moveGroupTo, movePieceTo, movePiecesBy, piecesInRect, removePieceById, removePiecesByIds, rotateGroupAroundCenter, rotatePieceAroundCenter, rotatePieceById, snapGroupDelta, validatePieceEdit, withoutLocked } from '../pieceOps';
 import { fitsAt, type Piece2D } from '../customShape';
 import { ROOM_BLOCKER_PREFIX, roomBlockers, type RoomPlan } from '../room';
 
@@ -632,5 +632,22 @@ describe('validatePieceEdit', () => {
       expect(ok.pieces).toHaveLength(1);
       expect(ok.pieces.some((q) => q.id === 'blk')).toBe(false);
     }
+  });
+
+  describe('withoutLocked', () => {
+    it('entfernt gesperrte IDs aus der Auswahl', () => {
+      const result = withoutLocked(['p1', 'p2', 'p3'], new Set(['p2']));
+      expect(result).toEqual(['p1', 'p3']);
+    });
+
+    it('behält die Referenz, wenn nichts entfällt', () => {
+      const ids = ['p1', 'p2'];
+      expect(withoutLocked(ids, new Set(['p9']))).toBe(ids);
+      expect(withoutLocked(ids, new Set())).toBe(ids);
+    });
+
+    it('liefert eine leere Liste, wenn alle gesperrt sind', () => {
+      expect(withoutLocked(['p1'], new Set(['p1']))).toEqual([]);
+    });
   });
 });

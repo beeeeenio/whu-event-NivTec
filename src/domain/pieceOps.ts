@@ -85,6 +85,15 @@ export function moveGroupTo(pieces: Piece2D[], ids: readonly string[], targetX: 
 }
 
 /**
+ * Entfernt gesperrte IDs aus einer Auswahl (Rahmenauswahl, Alles auswählen, Einfügen).
+ * Gesperrte Stücke bleiben belegt, sind aber nicht auswählbar. Gleiche Referenz, wenn nichts entfällt.
+ */
+export function withoutLocked(ids: string[], locked: ReadonlySet<string>): string[] {
+  if (locked.size === 0 || !ids.some((id) => locked.has(id))) return ids;
+  return ids.filter((id) => !locked.has(id));
+}
+
+/**
  * Removes all pieces whose IDs are in `ids` in one step.
  * Returns a new array. Returns the SAME array reference if none of the IDs was found.
  */
