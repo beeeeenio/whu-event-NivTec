@@ -1,5 +1,13 @@
 import type { Piece2D } from '../../domain/customShape';
-import { forexKey, freeEdges } from '../../domain/forex';
+import { useState } from 'react';
+import {
+  forexKey,
+  forexPrintGroups,
+  freeEdges,
+  FRONT_PRINT_GROUP,
+  type ForexPrintGroup,
+  type PlacedForexPanel,
+} from '../../domain/forex';
 import { quarterCirclePath, trianglePoints } from '../../domain/triangle';
 import type { ForexPanel, ForexSide } from '../../domain/types';
 
@@ -7,9 +15,18 @@ interface Props {
   /** Stücke in normalisierten Plan-Koordinaten (wie für Grundriss/3D). */
   pieces: Piece2D[];
   forexPanels: ForexPanel[];
+  /** Aktive Blenden mit ihrer Kante (für Druckgruppen und Längen). */
+  placed: PlacedForexPanel[];
+  /** Druckbilder je ForexPanel.id. */
+  prints: Record<string, string>;
   onToggle: (pieceId: string, side: ForexSide) => void;
   onAllFrontEdges: () => void;
   onClear: () => void;
+  /** Ein Bild über die Platten einer Druckgruppe verteilen. */
+  onUploadPrint: (group: ForexPrintGroup, file: File) => Promise<void>;
+  onRemovePrint: (group: ForexPrintGroup) => void;
+  /** Druckgruppe einer Platte setzen; undefined = eigener Druck, '__new' = neue Gruppe. */
+  onSetPrintGroup: (panelId: string, printGroup: string | undefined) => void;
 }
 
 const SIDE_LABELS: Record<ForexSide, string> = {
@@ -24,8 +41,44 @@ const SIDE_LABELS: Record<ForexSide, string> = {
  * Grundriss nur für die Forex-Blenden: an jeder freien Außenkante ein Schalter „Forex“.
  * Kanten, an denen ein Nachbarpodest anliegt, bekommen keinen Schalter.
  */
-export function ForexEdgeEditor({ pieces, forexPanels, onToggle, onAllFrontEdges, onClear }: Props) {
+function groupLabel(key: string): string {
+  return key === FRONT_PRINT_GROUP ? 'Vorderkante' : key;
+}
+
+export function ForexEdgeEditor({
+  pieces,
+  forexPanels,
+  placed,
+  prints,
+  onToggle,
+  onAllFrontEdges,
+  onClear,
+  onUploadPrint,
+  onRemovePrint,
+  onSetPrintGroup,
+}: Props) {
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
   if (pieces.length === 0) return null;
+
+  const pieceNo = (pieceId: string) => pieces.findIndex((p) => p.id === pieceId) + 1;
+  const groups = forexPrintGroups(placed);
+  const groupNames = Array.from(new Set(forexPanels.map((p) => p.printGroup).filter((g): g is string => !!g)));
+
+  async function handleUpload(group: ForexPrintGroup, e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // dieselbe Datei muss sich erneut auswählen lassen
+    if (!file) return;
+    setUploadError(null);
+    setBusyKey(group.key);
+    try {
+      await onUploadPrint(group, file);
+    } catch (err) {
+      setUploadError((err as Error).message);
+    } finally {
+      setBusyKey(null);
+    }
+  }
 
   const edges = freeEdges(pieces);
   const active = new Set(forexPanels.map((p) => forexKey(p.pieceId, p.side)));
@@ -139,8 +192,102 @@ export function ForexEdgeEditor({ pieces, forexPanels, onToggle, onAllFrontEdges
       </svg>
       <p className="text-xs text-[var(--color-text-muted)]">
         Schalter „Forex“ an jeder freien Außenkante: 5-mm-Platte direkt vor der Kante, vom Boden bis 1 cm unter die
-        Belag-Oberkante. Vorderkante = unten im Plan. Druckbilder werden nicht mit exportiert.
+        Belag-Oberkante. Vorderkante = unten im Plan.
       </p>
+
+      {groups.length > 0 && (
+        <div className="space-y-1.5">
+          <h3 className="text-sm font-semibold text-[var(--color-text)]">Drucke</h3>
+          {groups.map((group) => {
+            const thumb = prints[group.panels[0].panel.id];
+            const hasPrint = group.panels.some((p) => prints[p.panel.id]);
+            const label =
+              group.printGroup !== undefined
+                ? `${groupLabel(group.printGroup)} · ${group.panels.length} ${group.panels.length === 1 ? 'Platte' : 'Platten'}`
+                : `Podest ${pieceNo(group.panels[0].panel.pieceId)} · ${SIDE_LABELS[group.panels[0].panel.side]}`;
+            return (
+              <div
+                key={group.key}
+                className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm"
+              >
+                {thumb ? (
+                  <img src={thumb} alt="Druck" className="h-8 w-16 rounded border border-[var(--color-border)] object-cover" />
+                ) : (
+                  <div className="h-8 w-16 rounded border border-[var(--color-border)] bg-white" aria-hidden />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[var(--color-text)]">{label}</div>
+                  <div className="text-xs text-[var(--color-text-muted)]">
+                    {(Math.round(group.lengthM * 100) / 100).toString().replace('.', ',')} m breit
+                  </div>
+                </div>
+                {group.panels.length === 1 && (
+                  <select
+                    value={group.printGroup ?? ''}
+                    onChange={(e) => onSetPrintGroup(group.panels[0].panel.id, e.target.value || undefined)}
+                    className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-1 text-xs text-[var(--color-text)]"
+                    title="Mehrere Platten zu einem durchlaufenden Druck verbinden"
+                  >
+                    <option value="">Eigener Druck</option>
+                    {groupNames
+                      .filter((g) => g !== group.printGroup)
+                      .map((g) => (
+                        <option key={g} value={g}>
+                          Zu „{groupLabel(g)}“
+                        </option>
+                      ))}
+                    <option value="__new">Neue Druckgruppe</option>
+                  </select>
+                )}
+                {group.panels.length > 1 && (
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-[var(--color-text-muted)]">Platten</summary>
+                    <ul className="mt-1 space-y-0.5">
+                      {group.panels.map((p) => (
+                        <li key={p.panel.id} className="flex items-center gap-1.5">
+                          Podest {pieceNo(p.panel.pieceId)} · {SIDE_LABELS[p.panel.side]}
+                          <button
+                            type="button"
+                            onClick={() => onSetPrintGroup(p.panel.id, undefined)}
+                            className="underline text-[var(--color-text-muted)] hover:text-[var(--color-danger)]"
+                          >
+                            lösen
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+                <label className="cursor-pointer rounded-md border border-[var(--color-accent)] px-2 py-1 text-xs text-[var(--color-accent)] hover:bg-[var(--color-panel-fill)]">
+                  {busyKey === group.key ? 'Lädt …' : hasPrint ? 'Druck ersetzen' : 'Druck hochladen'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    disabled={busyKey !== null}
+                    onChange={(e) => handleUpload(group, e)}
+                  />
+                </label>
+                {hasPrint && (
+                  <button
+                    type="button"
+                    onClick={() => onRemovePrint(group)}
+                    className="text-xs text-[var(--color-text-muted)] underline hover:text-[var(--color-danger)]"
+                  >
+                    Druck entfernen
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          {uploadError && <p className="text-xs text-[var(--color-danger)]">{uploadError}</p>}
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Ein Druck einer Gruppe wird von links nach rechts (von außen gesehen) über ihre Platten verteilt und in der
+            3D-Ansicht gezeigt. Drucke bleiben nur in diesem Browser gespeichert und sind nicht Teil der Plan-Datei — in
+            der Stadthallenplanung werden sie separat hochgeladen.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

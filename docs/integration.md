@@ -90,4 +90,5 @@ interface ForexPanel {
 
 - Beim Import werden ungültige Einträge verworfen: unbekannte `pieceId`, ungültige `side`, `'hyp'` bei Nicht-Dreiecken (auch Viertelkreis), eine Kante, die das Podest nicht hat (z. B. `'bottom'` bei Dreieck `corner: 'tl'`), doppelte `id` oder eine zweite Blende an derselben Kante.
 - Exportiert werden nur Blenden an Kanten, die im aktuellen Plan frei sind (kein Nachbarpodest liegt an). Druckbilder sind nie Teil der Datei.
+- Drucke lassen sich im NivTec-Tool wie in der Stadthallenplanung hochladen: je Platte oder je `printGroup` (ein Bild wird von außen gesehen links → rechts über die Platten verteilt, gleiche Schnitt- und Sortierlogik). Sie liegen nur lokal im Browser (IndexedDB, je `ForexPanel.id`) und dienen der 3D-Vorschau. „Alle Vorderkanten“ setzt `printGroup: 'vorne'`.
 - Zuschnitt in der Materialliste: Kantenlänge × (Bauhöhe − 10 mm), z. B. „Forex 2000 × 590 mm, 5 mm“ bei 60 cm.
