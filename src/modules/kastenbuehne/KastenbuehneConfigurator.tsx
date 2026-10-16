@@ -270,7 +270,10 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
           </div>
         </details>
         {roomConflictCount > 0 && (
-          <WarningBanner>{roomConflictCount} Stücke liegen auf Hindernissen oder außerhalb des Raums.</WarningBanner>
+          <WarningBanner>
+            {roomConflictCount === 1 ? '1 Stück liegt' : `${roomConflictCount} Stücke liegen`} auf Hindernissen oder
+            außerhalb des Raums.
+          </WarningBanner>
         )}
         <PieceCanvasEditor
           {...editorProps}

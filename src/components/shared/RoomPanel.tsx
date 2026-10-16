@@ -80,6 +80,8 @@ export function RoomPanel({ room, onChange }: Props) {
 
   function setObstacleLabel(id: string, text: string) {
     const trimmed = text.trim().slice(0, MAX_LABEL_LENGTH);
+    // Unveränderte Bezeichnung: kein leerer Undo-Schritt.
+    if ((currentRoom.obstacles.find((o) => o.id === id)?.label ?? '') === trimmed) return;
     onChange({
       ...currentRoom,
       obstacles: currentRoom.obstacles.map((o) => {
