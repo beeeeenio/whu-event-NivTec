@@ -51,7 +51,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
   const [resultTab, setResultTab] = useState<ResultTab>('kennzahlen');
   // Maßketten im Grundriss und in der PPTX (Standard: an).
   const [showPlanDims, setShowPlanDims] = useState(true);
-  // Ansicht: Bühne sperren und Forex-Blenden ausblenden. Nicht in der Plan-Datei; Materialliste und Export bleiben vollständig.
+  // Ansicht: Bühne sperren und Forex-Blenden ausblenden. Nicht in der Plan-Datei; die Materialliste bleibt vollständig, das 3D-Bild im Export zeigt die aktuelle Ansicht.
   const [stageLocked, setStageLocked] = useState(false);
   const [forexHidden, setForexHidden] = useState(false);
   const { onCanvasReady, getCanvas } = useExportCanvas(() => setResultTab('3d'));
@@ -337,7 +337,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
               type="button"
               onClick={() => setForexHidden((v) => !v)}
               aria-pressed={forexHidden}
-              title="Blenden nur ausblenden: Materialliste und Export bleiben vollständig"
+              title="Blenden nur ausblenden: Plan-Datei und Materialliste bleiben vollständig; das 3D-Bild im Export zeigt die aktuelle Ansicht"
               className={ACTION_BTN}
             >
               {forexHidden ? 'Forex-Blenden einblenden' : 'Forex-Blenden ausblenden'}
@@ -345,7 +345,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
           </div>
           {forexHidden ? (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-muted)]">
-              <span>Forex-Blenden ausgeblendet. Sie bleiben in Materialliste und Export erhalten.</span>
+              <span>Forex-Blenden ausgeblendet. Sie bleiben in Plan-Datei und Materialliste erhalten, fehlen aber in 3D und im 3D-Bild des Exports.</span>
               <button type="button" onClick={() => setForexHidden(false)} className="text-xs underline text-[var(--color-accent)]">
                 Einblenden
               </button>

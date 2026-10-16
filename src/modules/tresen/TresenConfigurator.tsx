@@ -65,7 +65,7 @@ function LayerToggles({ view, onChange }: { view: LayerView; onChange: (next: La
         type="button"
         onClick={() => onChange({ ...view, hidden: !view.hidden })}
         aria-pressed={view.hidden}
-        title="Ausgeblendete Ebenen bleiben in Kennzahlen, Materialliste und Export vollständig"
+        title="Ausgeblendete Ebenen bleiben in Kennzahlen, Materialliste und Plan-Datei vollständig; in 3D und im 3D-Bild des Exports fehlen sie"
         className={ACTION_BTN}
       >
         {view.hidden ? 'Einblenden' : 'Ausblenden'}
