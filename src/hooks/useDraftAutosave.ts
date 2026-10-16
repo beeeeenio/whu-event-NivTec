@@ -101,7 +101,11 @@ export function useDraftAutosave(namespace: string, currentData: unknown, onLoad
   // Mehr-Tab-Erkennung: das storage-Event feuert nur in anderen Tabs, nie im schreibenden Tab selbst.
   useEffect(() => {
     function onStorage(e: StorageEvent) {
-      if (e.key === draftStorageKey(namespace) && e.newValue !== null) setOtherTabChanged(true);
+      if (e.key !== draftStorageKey(namespace) || e.newValue === null) return;
+      // Gleicher Stand wie hier (z. B. der andere Tab hat gerade unseren Stand geladen und
+      // zurückgeschrieben) — kein Hinweis, sonst schaukeln sich beide Tabs gegenseitig auf.
+      if (e.newValue === JSON.stringify(latestRef.current)) return;
+      setOtherTabChanged(true);
     }
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
