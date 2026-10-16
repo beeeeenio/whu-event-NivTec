@@ -468,7 +468,8 @@ export function TresenConfigurator({
               )
             }
           />
-          {!sharedView && <PlacedPiecesChips pieces={basePieces} onRemovePiece={baseEditorProps.onRemovePiece} />}
+          {/* Gesperrte Ebene: keine Entfernen-Chips, sonst ließe sich die Sperre umgehen. */}
+          {!sharedView && !effBaseView.locked && <PlacedPiecesChips pieces={basePieces} onRemovePiece={baseEditorProps.onRemovePiece} />}
           </>
         )}
       </section>
@@ -504,7 +505,7 @@ export function TresenConfigurator({
               <button
                 type="button"
                 onClick={setThekeToHalfDepth}
-                disabled={baseLayout.widthM <= 0}
+                disabled={baseLayout.widthM <= 0 || effTopView.locked}
                 title="Ersetzt die Thekenplatte durch eine vorne bündige Fläche in Unterbau-Breite, bei halber Unterbau-Tiefe"
                 className="px-3 py-1.5 rounded-md text-sm border border-[var(--color-accent)] text-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--color-accent)] hover:text-[var(--color-accent-contrast)]"
               >
@@ -530,7 +531,7 @@ export function TresenConfigurator({
               minCanvasWidthM={sharedCanvasWidthM}
               referenceFootprint={baseBoundingBox ? { ...baseBoundingBox, label: 'Unterbau' } : undefined}
             />
-            {!sharedView && <PlacedPiecesChips pieces={topPieces} onRemovePiece={topEditorProps.onRemovePiece} />}
+            {!sharedView && !effTopView.locked && <PlacedPiecesChips pieces={topPieces} onRemovePiece={topEditorProps.onRemovePiece} />}
           </>
         )}
       </section>

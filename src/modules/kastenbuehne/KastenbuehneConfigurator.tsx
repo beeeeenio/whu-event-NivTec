@@ -411,7 +411,8 @@ export function KastenbuehneConfigurator({
             </div>
           }
         />
-        {!sharedView && <PlacedPiecesChips pieces={pieces} onRemovePiece={editorProps.onRemovePiece} />}
+        {/* Gesperrte Bühne: keine Entfernen-Chips, sonst ließe sich die Sperre umgehen. */}
+        {!sharedView && !stageLocked && <PlacedPiecesChips pieces={pieces} onRemovePiece={editorProps.onRemovePiece} />}
       </section>
 
       {hasContent && (

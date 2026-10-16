@@ -200,6 +200,12 @@ h3 {
   font-family: var(--font-display);
 }
 
+/* Fokussierte Stücke im Plan: kein Browser-Fokusrahmen. Der würde in viewBox-Einheiten (Metern) gezeichnet
+   und als riesiger Ring über dem Plan liegen; der Editor zeichnet einen eigenen Fokusring in Akzentfarbe. */
+svg[role='application'] *:focus {
+  outline: none;
+}
+
 /* Touch-Ziele im Editor: auf Geräten ohne Maus (grober Zeiger) mindestens 44 px; am Desktop bleibt das Layout unverändert. */
 @media (pointer: coarse) {
   .pce-target {
