@@ -34,7 +34,7 @@ function materialAppendixHtml(items: MaterialListItem[]): string {
   const cell = (tag: 'th' | 'td') => (v: string) => `<${tag}>${escapeXml(v)}</${tag}>`;
   const head = `<tr>${header.map(cell('th')).join('')}</tr>`;
   const rows = body.map((r) => `<tr>${r.map(cell('td')).join('')}</tr>`).join('');
-  return `<div class="seite"><h2>Materialliste</h2><table><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="anhang"><h2>Materialliste</h2><table><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
 }
 
 /** Maßstäblicher Plan als SVG-Download oder Druck/PDF über die Druckansicht; die Einstellungen liegen im aufklappbaren Panel. */

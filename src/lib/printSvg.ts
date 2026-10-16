@@ -44,6 +44,8 @@ export function buildPrintHtml(svg: string, paper: PaperFormat, orientation: Pap
     `svg{display:block;width:${w}mm;height:${h}mm} ` +
     // Umbruch nur vor einem Anhang, sonst druckt Chrome eine leere zweite Seite.
     '.seite{overflow:hidden} .seite + *{break-before:page;page-break-before:always} ' +
+    // Anhang mit Rand (die @page hat keinen) und ohne overflow:hidden, damit lange Tabellen umbrechen.
+    '.anhang{padding:12mm;font:10pt Arial,sans-serif} .anhang h2{margin:0 0 4mm;font-size:14pt} ' +
     'table{border-collapse:collapse;font:10pt Arial,sans-serif} td,th{border:1px solid #bbb;padding:2px 6px}' +
     `</style></head><body><div class="seite">${svg}</div>${appendixHtml}</body></html>`
   );
