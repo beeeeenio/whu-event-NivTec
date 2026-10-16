@@ -2,7 +2,8 @@ import { makePieceId, reservePieceIds, type Piece2D } from './customShape';
 import { STRUCTURE_RULES } from './rules';
 import { isCatalogTriangleBox } from './panels';
 import { SPINDEL_HEIGHT_OPTIONS_CM } from './tresen';
-import type { PieceShape, TriangleCorner } from './types';
+import { FOREX_SIDES, isTrianglePiece, pieceHasSide } from './forex';
+import type { ForexPanel, ForexSide, PieceShape, TriangleCorner } from './types';
 
 /**
  * Gespeicherter Zustand einer Kastenbühne — wird als JSON exportiert/importiert.
@@ -10,6 +11,8 @@ import type { PieceShape, TriangleCorner } from './types';
 export interface KastenbuehneSavedState {
   heightCm?: number;
   pieces: Piece2D[];
+  /** Optional — ältere Dateien ohne Forex-Blenden laden weiter. */
+  forexPanels?: ForexPanel[];
 }
 
 /**
@@ -90,13 +93,54 @@ export function sanitizePieces(raw: unknown): Piece2D[] {
   return result;
 }
 
+/**
+ * Bereinigt Forex-Blenden gegen die (bereits bereinigten) Stücke. Ungültige Einträge werden
+ * verworfen: fehlende/doppelte id, unbekannte pieceId, ungültige side, 'hyp' bei Nicht-Dreiecken,
+ * eine Kante, die das Podest gar nicht hat (z. B. 'bottom' bei Dreieck 'tl'), oder eine zweite
+ * Blende an derselben Kante. Ungültige optionale Felder fallen einzeln weg.
+ */
+export function sanitizeForexPanels(raw: unknown, pieces: Piece2D[]): ForexPanel[] {
+  if (!Array.isArray(raw)) return [];
+  const piecesById = new Map(pieces.map((p) => [p.id, p]));
+  const seenIds = new Set<string>();
+  const seenEdges = new Set<string>();
+  const result: ForexPanel[] = [];
+
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+    const v = item as Record<string, unknown>;
+    if (typeof v.id !== 'string' || !v.id || seenIds.has(v.id)) continue;
+    if (typeof v.pieceId !== 'string') continue;
+    const piece = piecesById.get(v.pieceId);
+    if (!piece) continue;
+    if (typeof v.side !== 'string' || !FOREX_SIDES.includes(v.side as ForexSide)) continue;
+    const side = v.side as ForexSide;
+    if (side === 'hyp' && !isTrianglePiece(piece)) continue;
+    if (!pieceHasSide(piece, side)) continue;
+    const edgeKey = `${piece.id}::${side}`;
+    if (seenEdges.has(edgeKey)) continue;
+
+    const panel: ForexPanel = { id: v.id, pieceId: piece.id, side };
+    if (typeof v.thicknessMm === 'number' && isFinite(v.thicknessMm) && v.thicknessMm > 0) {
+      panel.thicknessMm = v.thicknessMm;
+    }
+    if (typeof v.printGroup === 'string' && v.printGroup) {
+      panel.printGroup = v.printGroup;
+    }
+    seenIds.add(v.id);
+    seenEdges.add(edgeKey);
+    result.push(panel);
+  }
+  return result;
+}
+
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
 /**
  * Validiert und parsed eine Kastenbühne-Datei — prüft ob sie wirklich eine Bühne ist
  * (nicht versehentlich ein Tresen), und ob sie die notwendigen Felder hat.
  */
-export function parseKastenbuehneFile(data: unknown): ParseResult<{ heightCm?: number; pieces: Piece2D[] }> {
+export function parseKastenbuehneFile(data: unknown): ParseResult<KastenbuehneSavedState> {
   // Nicht-Objekt ablehnen
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return {
@@ -134,7 +178,10 @@ export function parseKastenbuehneFile(data: unknown): ParseResult<{ heightCm?: n
     }
   }
 
-  return { ok: true, value: { heightCm, pieces } };
+  // Forex-Blenden nur übernehmen, wenn die Datei welche mitbringt (alte Dateien: Feld fehlt)
+  const forexPanels = 'forexPanels' in obj ? sanitizeForexPanels(obj.forexPanels, pieces) : undefined;
+
+  return { ok: true, value: { heightCm, pieces, forexPanels } };
 }
 
 /**

@@ -12,14 +12,23 @@ import { SavedConfigsPanel } from '../../components/shared/SavedConfigsPanel';
 import { StairsRampCalculator } from '../../components/shared/StairsRampCalculator';
 import { SummaryStats } from '../../components/shared/SummaryStats';
 import { buildLayoutFromPieces, normalizeToOrigin } from '../../domain/customShape';
+import {
+  addAllFrontEdges,
+  appendMaterialItems,
+  buildForexMaterialItems,
+  placeForexPanels,
+  toggleForexPanel,
+} from '../../domain/forex';
 import { STRUCTURE_RULES } from '../../domain/rules';
-import { parseKastenbuehneFile } from '../../domain/savedState';
+import { parseKastenbuehneFile, type KastenbuehneSavedState } from '../../domain/savedState';
 import { formatMeters } from '../../lib/format';
 import { useDraftAutosave } from '../../hooks/useDraftAutosave';
 import { useExportCanvas } from '../../hooks/useExportCanvas';
 import { NO_RAILING_SIDES, useDerivedGeometry } from '../../hooks/useDerivedGeometry';
 import { usePieceLayer } from '../../hooks/usePieceLayer';
 import type { CiId } from '../../lib/ci';
+import type { ForexPanel, ForexSide } from '../../domain/types';
+import { ForexEdgeEditor } from './ForexEdgeEditor';
 
 type ResultTab = 'kennzahlen' | 'grundriss' | '3d' | 'material';
 
@@ -33,11 +42,27 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
   // Alles Abgeleitete (Kennzahlen, Grundriss, 3D, PPTX, Materialliste) sieht die Bühne an (0,0) —
   // wo sie auf der Zeichenfläche liegt ("Alles verschieben"), soll dort nichts verändern. Der
   // Editor selbst bekommt weiter die echten Positionen.
-  const layout = useMemo(() => buildLayoutFromPieces(normalizeToOrigin(layer.pieces)), [layer.pieces]);
+  const normalizedPieces = useMemo(() => normalizeToOrigin(layer.pieces), [layer.pieces]);
+  const layout = useMemo(() => buildLayoutFromPieces(normalizedPieces), [normalizedPieces]);
+
+  // Forex-Blenden hängen per pieceId an einer Kante. Liegt dort (nach Verschieben/Löschen) kein
+  // freies Podest mehr, fallen sie aus 3D, Materialliste und Export heraus.
+  const [forexPanels, setForexPanels] = useState<ForexPanel[]>([]);
+  const placedForex = useMemo(() => placeForexPanels(normalizedPieces, forexPanels), [normalizedPieces, forexPanels]);
+  const activeForexPanels = useMemo(() => placedForex.map((f) => f.panel), [placedForex]);
 
   // Kastenbühne ist regeltechnisch eine ganz normale Bühne (gleiche Höhenserie,
   // Verstrebungs-/Geländerschwellen) — nur der Bauweg dahin ist ein anderer.
-  const { totalFeet, labeledFeet, materialList } = useDerivedGeometry(layout, 'buehne', heightCm, NO_RAILING_SIDES);
+  const { totalFeet, labeledFeet, materialList: podestMaterialList } = useDerivedGeometry(
+    layout,
+    'buehne',
+    heightCm,
+    NO_RAILING_SIDES,
+  );
+  const materialList = useMemo(
+    () => appendMaterialItems(podestMaterialList, buildForexMaterialItems(normalizedPieces, forexPanels, heightCm)),
+    [podestMaterialList, normalizedPieces, forexPanels, heightCm],
+  );
 
   const hasContent = layer.pieces.length > 0;
 
@@ -48,10 +73,19 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
     }
     if (result.value.heightCm !== undefined) setHeightCm(result.value.heightCm);
     layer.replace(result.value.pieces);
+    setForexPanels(result.value.forexPanels ?? []);
     return null;
   }
 
-  const currentSavedState = { heightCm, pieces: layer.pieces };
+  // forexPanels nur mitschreiben, wenn es welche gibt — Dateien ohne Blenden bleiben wie bisher.
+  const currentSavedState: KastenbuehneSavedState =
+    activeForexPanels.length > 0
+      ? { heightCm, pieces: layer.pieces, forexPanels: activeForexPanels }
+      : { heightCm, pieces: layer.pieces };
+
+  function handleToggleForex(pieceId: string, side: ForexSide) {
+    setForexPanels((prev) => toggleForexPanel(prev, pieceId, side));
+  }
   const { restored, discard } = useDraftAutosave('kastenbuehne', currentSavedState, applySavedState);
 
   return (
@@ -69,6 +103,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
               onClick={() => {
                 discard();
                 layer.replace([]);
+                setForexPanels([]);
                 setHeightCm(STRUCTURE_RULES.buehne.heightOptionsCm[0]);
               }}
               className="shrink-0 text-xs underline"
@@ -98,6 +133,19 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
         />
         <PlacedPiecesChips pieces={layer.pieces} onRemovePiece={layer.editorProps.onRemovePiece} />
       </section>
+
+      {hasContent && (
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold text-[var(--color-text)]">Forex-Blenden</h2>
+          <ForexEdgeEditor
+            pieces={normalizedPieces}
+            forexPanels={activeForexPanels}
+            onToggle={handleToggleForex}
+            onAllFrontEdges={() => setForexPanels((prev) => addAllFrontEdges(normalizedPieces, prev))}
+            onClear={() => setForexPanels([])}
+          />
+        </section>
+      )}
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold text-[var(--color-text)]">Geländer</h2>
@@ -166,7 +214,7 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
               braucht die live WebGL-Canvas-Referenz, die beim Unmounten verloren ginge. */}
           <div className={resultTab === '3d' ? '' : 'hidden'}>
             <AufbauScene3D
-              tiers={[{ layout, feet: labeledFeet, heightM: heightCm / 100 }]}
+              tiers={[{ layout, feet: labeledFeet, heightM: heightCm / 100, forex: placedForex }]}
               onCanvasReady={onCanvasReady}
             />
           </div>

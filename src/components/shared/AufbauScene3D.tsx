@@ -6,6 +6,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import type { LabeledFootPosition } from '../../domain/feet';
 import { footColorForHeight } from '../../domain/footColorScale';
+import { FOREX_TOP_GAP_MM, type PlacedForexPanel } from '../../domain/forex';
 import { trianglePoints } from '../../domain/triangle';
 import type { LayoutResult, TriangleCorner } from '../../domain/types';
 
@@ -38,6 +39,8 @@ const SONDERMASS_INFILL_COLOR = '#9a6b00';
 // Einmal gebaute, geteilte Materialien (nicht pro Mesh neu erzeugen).
 const GALVANIZED_MATERIAL = new THREE.MeshStandardMaterial({ color: '#a9aeb1', metalness: 0.85, roughness: 0.45 }); // Rohre, Platte
 const SPINDLE_MATERIAL = new THREE.MeshStandardMaterial({ color: '#7f8589', metalness: 0.9, roughness: 0.35 });    // Spindel, Mutter
+// Forex-Blende: weiße PVC-Hartschaumplatte (ohne Druckbild).
+const FOREX_MATERIAL = new THREE.MeshStandardMaterial({ color: '#f7f7f4', metalness: 0, roughness: 0.7 });
 const FOOT_BAND_MATERIALS = new Map<string, THREE.MeshStandardMaterial>();
 function footBandMaterial(color: string): THREE.MeshStandardMaterial {
   let m = FOOT_BAND_MATERIALS.get(color);
@@ -342,6 +345,28 @@ function RectPanel({ cx, cz, deckY, w, d, infillColor }: {
   );
 }
 
+/**
+ * Forex-Blende direkt vor einer freien Kante: steht auf dem Boden der Ebene (baseY) und endet
+ * 1 cm unter der Belag-Oberkante. Plan-Koordinaten (x, y) → Szene (x, z).
+ */
+function ForexBlende({ forex, baseY, belagTopY, offsetX, offsetZ }: {
+  forex: PlacedForexPanel; baseY: number; belagTopY: number; offsetX: number; offsetZ: number;
+}) {
+  const { edge, thicknessMm } = forex;
+  const t = thicknessMm / 1000;
+  const h = belagTopY - FOREX_TOP_GAP_MM / 1000 - baseY;
+  if (h <= 0 || edge.lengthM <= 0) return null;
+  const cx = (edge.x1 + edge.x2) / 2 + edge.nx * (t / 2) + offsetX;
+  const cz = (edge.y1 + edge.y2) / 2 + edge.ny * (t / 2) + offsetZ;
+  const dx = (edge.x2 - edge.x1) / edge.lengthM;
+  const dz = (edge.y2 - edge.y1) / edge.lengthM;
+  return (
+    <mesh position={[cx, baseY + h / 2, cz]} rotation={[0, Math.atan2(-dz, dx), 0]} material={FOREX_MATERIAL} castShadow receiveShadow>
+      <boxGeometry args={[edge.lengthM, h, t]} />
+    </mesh>
+  );
+}
+
 export interface SceneTier {
   layout: LayoutResult;
   /** Füße mit renderX/renderY — wird sichtbar in die Eigentümer-Platte gezeichnet statt exakt auf die Plattengrenze. */
@@ -355,6 +380,8 @@ export interface SceneTier {
   panelColor?: string;
   footColor?: string;
   label?: string;
+  /** Forex-Blenden an freien Außenkanten — Kanten in denselben Plan-Koordinaten wie `layout`. */
+  forex?: PlacedForexPanel[];
 }
 
 interface Props {
@@ -556,6 +583,17 @@ export function AufbauScene3D({ tiers, onCanvasReady }: Props) {
                     );
                   })(),
                 )}
+
+                {tier.forex?.map((fx) => (
+                  <ForexBlende
+                    key={fx.panel.id}
+                    forex={fx}
+                    baseY={baseY}
+                    belagTopY={deckY + PANEL_THICKNESS_M - INFILL_RECESS_M}
+                    offsetX={offsetX}
+                    offsetZ={offsetZ}
+                  />
+                ))}
 
                 {tier.feet.map((f, i) => (
                   <Foot
