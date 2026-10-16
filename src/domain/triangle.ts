@@ -93,8 +93,12 @@ export function quarterCirclePath(
   // Radius für den Kreisbogen (w === d für Viertelkreis)
   const radius = piece.w;
 
-  // SVG-Bogen: sweep-flag=1 für eine nach außen bulgende Quarter-Circle (mit y-nach-unten Konvention)
-  return `M ${center.x} ${center.y} L ${end1.x} ${end1.y} A ${radius} ${radius} 0 0 1 ${end2.x} ${end2.y} Z`;
+  // SVG-Bogen um den Mittelpunkt (nach außen gewölbt): Die Drehrichtung von end1 nach end2 hängt
+  // von der Ecke ab — ein festes sweep-flag würde bei 'tr'/'br' den Bogen um die Phantom-Ecke
+  // schlagen (nach innen gewölbt). Kreuzprodukt > 0 = im Uhrzeigersinn (y nach unten) = sweep 1.
+  const cross = (end1.x - center.x) * (end2.y - center.y) - (end1.y - center.y) * (end2.x - center.x);
+  const sweep = cross > 0 ? 1 : 0;
+  return `M ${center.x} ${center.y} L ${end1.x} ${end1.y} A ${radius} ${radius} 0 0 ${sweep} ${end2.x} ${end2.y} Z`;
 }
 
 /**

@@ -240,7 +240,12 @@ function getCachedShapes(kind: 'dreieck' | 'viertelkreis', corner: TriangleCorne
     const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
     const endAngle = Math.atan2(end.y - center.y, end.x - center.x);
     let angle = startAngle;
-    const angleDelta = (endAngle - startAngle) / segments;
+    // Immer den kurzen 90°-Bogen nehmen — sonst läuft z. B. bei 'br' (π → −π/2) die Interpolation
+    // 270° außen herum statt 90° innerhalb der Bounding-Box.
+    let sweepAngle = endAngle - startAngle;
+    if (sweepAngle > Math.PI) sweepAngle -= 2 * Math.PI;
+    if (sweepAngle < -Math.PI) sweepAngle += 2 * Math.PI;
+    const angleDelta = sweepAngle / segments;
     for (let i = 1; i <= segments; i++) {
       angle += angleDelta;
       arc.push({
@@ -248,7 +253,8 @@ function getCachedShapes(kind: 'dreieck' | 'viertelkreis', corner: TriangleCorne
         y: center.y + radius * Math.sin(angle),
       });
     }
-    outer = insetPolygon(arc, PANEL_GAP_M / 2);
+    // Wie beim Dreieck: Plan-y → Shape-y spiegeln (die Gruppe dreht um −90° um X, Shape-y wird zu −z).
+    outer = insetPolygon(arc.map((pt) => ({ x: pt.x, y: -pt.y })), PANEL_GAP_M / 2);
   } else {
     // Dreieck: skaliert auf w×d (von 1×1)
     const raw = trianglePoints({ x: 0, y: 0, w, d }, corner).map((pt) => ({ x: pt.x, y: -pt.y }));
