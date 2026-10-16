@@ -4,9 +4,11 @@ import {
   fitsAt,
   shiftPieces,
   type FilledPiece,
+  type PlacementOptions,
   type Piece2D,
 } from '../../domain/customShape';
 import { checkGroupMove, duplicateWithOffset } from '../../domain/pieceOps';
+import { alignmentGuides, nearestGaps, unionBounds, type AlignmentGuide, type GapMeasure, type Rect } from '../../domain/smartGuides';
 import { isSondermassPiece, TRIANGLE_PANEL_SIZE_M, QUARTER_CIRCLE_RADIUS_M, RECT_CATALOG } from '../../domain/panels';
 import { mirrorTriangleCornerDiagonal, nextTriangleCorner, quarterCirclePath, triangleHand, trianglePoints } from '../../domain/triangle';
 import type { TriangleCorner } from '../../domain/types';
@@ -55,12 +57,20 @@ const MIN_CANVAS_DEPTH_M = 4;
 const BUFFER_M = 2;
 const GRID_STEP_M = 0.5;
 const NUDGE_LARGE_M = 1;
+/** Kanten-Fangweite in Bildschirm-Pixeln; wird beim Platzieren und Verschieben in Meter umgerechnet. */
+const SNAP_TOLERANCE_PX = 8;
 const ARROW_DELTA: Partial<Record<string, [number, number]>> = {
   ArrowUp: [0, -1],
   ArrowDown: [0, 1],
   ArrowLeft: [-1, 0],
   ArrowRight: [1, 0],
 };
+
+/** Meter pro Bildschirm-Pixel über die Skalierung der CTM; ohne SVG-Box der Fallback 0,02. */
+function metersPerPxOf(svg: SVGSVGElement | null): number {
+  const ctm = svg?.getScreenCTM();
+  return ctm && ctm.a ? 1 / ctm.a : 0.02;
+}
 
 function round1(v: number): number {
   return Math.round(v * 10) / 10;
@@ -200,6 +210,124 @@ function PieceShape({
   );
 }
 
+/** Smart Guides beim Ziehen: Fluchtlinien, Abstandsmaße zu Nachbarn/Rand und das Gesamtmaß.
+ *  Alles in Metern; Strichstärken und Schrift werden über px umgerechnet, damit sie bei jeder
+ *  Zoomstufe gleich groß wirken. Reines Hinweis-Overlay (pointerEvents none). */
+function SmartGuidesLayer({
+  guides,
+  gaps,
+  total,
+  px,
+}: {
+  guides: AlignmentGuide[];
+  gaps: GapMeasure[];
+  total: Rect | null;
+  px: number;
+}) {
+  return (
+    <g pointerEvents="none">
+      {guides.map((g, i) =>
+        g.axis === 'x' ? (
+          <line
+            key={`guide-${i}`}
+            x1={g.pos}
+            x2={g.pos}
+            y1={g.from - 6 * px}
+            y2={g.to + 6 * px}
+            stroke="var(--color-accent)"
+            strokeWidth={px}
+            strokeDasharray={`${4 * px} ${3 * px}`}
+            opacity={g.kind === 'border' ? 0.6 : undefined}
+          />
+        ) : (
+          <line
+            key={`guide-${i}`}
+            y1={g.pos}
+            y2={g.pos}
+            x1={g.from - 6 * px}
+            x2={g.to + 6 * px}
+            stroke="var(--color-accent)"
+            strokeWidth={px}
+            strokeDasharray={`${4 * px} ${3 * px}`}
+            opacity={g.kind === 'border' ? 0.6 : undefined}
+          />
+        ),
+      )}
+      {gaps.map((g, i) => {
+        const mid = (g.from + g.to) / 2;
+        const label = `${formatMeters(g.lengthM, 2)} m`;
+        return g.axis === 'x' ? (
+          <g key={`gap-${i}`}>
+            <line x1={g.from} x2={g.to} y1={g.at} y2={g.at} stroke="var(--color-accent)" strokeWidth={px} />
+            <line x1={g.from} x2={g.from} y1={g.at - 4 * px} y2={g.at + 4 * px} stroke="var(--color-accent)" strokeWidth={px} />
+            <line x1={g.to} x2={g.to} y1={g.at - 4 * px} y2={g.at + 4 * px} stroke="var(--color-accent)" strokeWidth={px} />
+            <text
+              x={mid}
+              y={g.at - 4 * px}
+              fontSize={11 * px}
+              fill="var(--color-accent)"
+              fontFamily="var(--font-mono)"
+              stroke="var(--color-surface)"
+              strokeWidth={3 * px}
+              paintOrder="stroke"
+              textAnchor="middle"
+            >
+              {label}
+            </text>
+          </g>
+        ) : (
+          <g key={`gap-${i}`}>
+            <line x1={g.at} x2={g.at} y1={g.from} y2={g.to} stroke="var(--color-accent)" strokeWidth={px} />
+            <line x1={g.at - 4 * px} x2={g.at + 4 * px} y1={g.from} y2={g.from} stroke="var(--color-accent)" strokeWidth={px} />
+            <line x1={g.at - 4 * px} x2={g.at + 4 * px} y1={g.to} y2={g.to} stroke="var(--color-accent)" strokeWidth={px} />
+            <text
+              x={g.at + 4 * px}
+              y={mid}
+              fontSize={11 * px}
+              fill="var(--color-accent)"
+              fontFamily="var(--font-mono)"
+              stroke="var(--color-surface)"
+              strokeWidth={3 * px}
+              paintOrder="stroke"
+              textAnchor="middle"
+            >
+              {label}
+            </text>
+          </g>
+        );
+      })}
+      {total && (
+        <>
+          <rect
+            x={total.x}
+            y={total.y}
+            width={total.w}
+            height={total.d}
+            fill="none"
+            stroke="var(--color-accent)"
+            strokeWidth={px}
+            strokeDasharray={`${4 * px} ${3 * px}`}
+            opacity={0.45}
+          />
+          <text
+            x={total.x + total.w / 2}
+            y={total.y + total.d + 14 * px}
+            fontSize={11 * px}
+            fill="var(--color-accent)"
+            fontFamily="var(--font-mono)"
+            stroke="var(--color-surface)"
+            strokeWidth={3 * px}
+            paintOrder="stroke"
+            textAnchor="middle"
+          >
+            {`Gesamt ${formatMeters(total.w)} × ${formatMeters(total.d)} m`}
+          </text>
+        </>
+      )}
+    </g>
+  );
+}
+
 /** Maß-Beschriftung wie auf einem echten Aufmaßblatt — folgt einem einzelnen Stück
  *  beim Ziehen/Platzieren-Vorschau. */
 function DimensionLabel({ x, y, w, d }: { x: number; y: number; w: number; d: number }) {
@@ -335,20 +463,42 @@ export function PieceCanvasEditor({
     return { x: transformed.x, y: transformed.y };
   }
 
+  // Meter pro Bildschirm-Pixel. Der Wert wird aus dem DOM gemessen und im State gehalten, damit der
+  // Render nie an svgRef liest. Vor der ersten Messung gilt der Fallback 0,02 (siehe metersPerPxOf).
+  const [metersPerPx, setMetersPerPx] = useState(0.02);
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    // Neu messen, wenn sich die Größe des <svg> ändert oder die Viewbox wächst (Inhalt).
+    const measure = () => setMetersPerPx(metersPerPxOf(svg));
+    const frame = requestAnimationFrame(measure);
+    const observer = new ResizeObserver(measure);
+    observer.observe(svg);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [viewBox]);
+
+  // Fangweite für Kanten in Metern, damit sie unabhängig vom Zoom etwa 8 Bildschirm-px entspricht.
+  function placementOptions(): PlacementOptions {
+    return { snapToleranceM: SNAP_TOLERANCE_PX * metersPerPx };
+  }
+
   // Bedient sowohl den Klick-Bewaffnen-Hover als auch das Ziehen aus der Palette (sobald der
   // Cursor über dem Canvas ist) — eine einzige Vorschau-Quelle für beide Wege.
   function previewForPayload(payload: ToolPayload | null): FilledPiece[] | null {
     if (!payload || !pointerPos) return null;
     if (payload.kind === 'piece') {
-      const pos = findFreePosition(pieces, payload.w, payload.d, pointerPos.x - payload.w / 2, pointerPos.y - payload.d / 2);
+      const pos = findFreePosition(pieces, payload.w, payload.d, pointerPos.x - payload.w / 2, pointerPos.y - payload.d / 2, undefined, placementOptions());
       return [{ x: pos.x, y: pos.y, w: payload.w, d: payload.d }];
     }
     if (payload.kind === 'viertelkreis') {
       const r = QUARTER_CIRCLE_RADIUS_M;
-      const pos = findFreePosition(pieces, r, r, pointerPos.x - r / 2, pointerPos.y - r / 2);
+      const pos = findFreePosition(pieces, r, r, pointerPos.x - r / 2, pointerPos.y - r / 2, undefined, placementOptions());
       return [{ x: pos.x, y: pos.y, w: r, d: r, corner: payload.corner, shape: 'viertelkreis' }];
     }
-    const pos = findFreePosition(pieces, payload.w, payload.d, pointerPos.x - payload.w / 2, pointerPos.y - payload.d / 2);
+    const pos = findFreePosition(pieces, payload.w, payload.d, pointerPos.x - payload.w / 2, pointerPos.y - payload.d / 2, undefined, placementOptions());
     return [{ x: pos.x, y: pos.y, w: payload.w, d: payload.d, corner: payload.corner }];
   }
 
@@ -357,19 +507,39 @@ export function PieceCanvasEditor({
   const activePayload = armed ?? (paletteDrag?.overCanvas ? paletteDrag.payload : null);
   const previewPieces = previewForPayload(activePayload);
 
+  // Smart Guides: Live-Fläche des gerade bewegten oder platzierten Einzelstücks. Beim Ziehen eines
+  // Einzelstücks ist es das Ziel, sonst das Vorschau-Stück. Gruppen-Drag zeigt bewusst keine Guides.
+  const draggedPiece = drag?.moved && drag.target && !drag.group ? pieces.find((p) => p.id === drag.id) ?? null : null;
+  const previewSingle = previewPieces?.length === 1 ? previewPieces[0] : null;
+  const liveRect: Rect | null =
+    draggedPiece && drag?.target
+      ? { x: drag.target.x, y: drag.target.y, w: draggedPiece.w, d: draggedPiece.d }
+      : previewSingle
+        ? { x: previewSingle.x, y: previewSingle.y, w: previewSingle.w, d: previewSingle.d }
+        : null;
+  const others = liveRect ? pieces.filter((p) => !(draggedPiece && p.id === draggedPiece.id)) : [];
+  const liveGeometry = liveRect
+    ? {
+        guides: alignmentGuides(liveRect, others),
+        gaps: nearestGaps(liveRect, others),
+        total: others.length > 0 ? unionBounds([...others, liveRect]) : null,
+        px: metersPerPx,
+      }
+    : null;
+
   // Reine Platzier-Funktion ohne Seiteneffekt auf armed/paletteDrag — das bleibt Sache der
   // Aufrufer (Klick-Platzieren-Pfad, Paletten-Ziehen UND Tastatur-Platzieren nutzen dieselbe
   // Logik, nur die Umrechnung von Bildschirm- zu Meter-Koordinaten unterscheidet sich).
   function commitPayloadAtPoint(payload: ToolPayload, pos: { x: number; y: number }) {
     if (payload.kind === 'piece') {
-      const target = findFreePosition(pieces, payload.w, payload.d, pos.x - payload.w / 2, pos.y - payload.d / 2);
+      const target = findFreePosition(pieces, payload.w, payload.d, pos.x - payload.w / 2, pos.y - payload.d / 2, undefined, placementOptions());
       onAddPieces([{ x: target.x, y: target.y, w: payload.w, d: payload.d }]);
     } else if (payload.kind === 'viertelkreis') {
       const r = QUARTER_CIRCLE_RADIUS_M;
-      const target = findFreePosition(pieces, r, r, pos.x - r / 2, pos.y - r / 2);
+      const target = findFreePosition(pieces, r, r, pos.x - r / 2, pos.y - r / 2, undefined, placementOptions());
       onAddPieces([{ x: target.x, y: target.y, w: r, d: r, corner: payload.corner, shape: 'viertelkreis' }]);
     } else {
-      const target = findFreePosition(pieces, payload.w, payload.d, pos.x - payload.w / 2, pos.y - payload.d / 2);
+      const target = findFreePosition(pieces, payload.w, payload.d, pos.x - payload.w / 2, pos.y - payload.d / 2, undefined, placementOptions());
       onAddPieces([{ x: target.x, y: target.y, w: payload.w, d: payload.d, corner: payload.corner }]);
     }
   }
@@ -521,7 +691,7 @@ export function PieceCanvasEditor({
       setDrag((d) => (d && d.group ? { ...d, moved: true, group: { ...d.group, dx, dy, valid } } : d));
       return;
     }
-    const target = findFreePosition(pieces, piece.w, piece.d, x - drag.grabOffset.x, y - drag.grabOffset.y, piece.id);
+    const target = findFreePosition(pieces, piece.w, piece.d, x - drag.grabOffset.x, y - drag.grabOffset.y, piece.id, placementOptions());
     if (drag.moved && drag.target && drag.target.x === target.x && drag.target.y === target.y) return;
     setDrag((d) => (d ? { ...d, moved: true, target } : d));
   }
@@ -1037,11 +1207,14 @@ export function PieceCanvasEditor({
           <DimensionLabel x={previewPieces[0].x} y={previewPieces[0].y} w={previewPieces[0].w} d={previewPieces[0].d} />
         )}
 
+        {liveGeometry && (
+          <SmartGuidesLayer guides={liveGeometry.guides} gaps={liveGeometry.gaps} total={liveGeometry.total} px={liveGeometry.px} />
+        )}
       </svg>
 
       <div className="space-y-2" style={{ fontFamily: 'var(--font-display)' }}>
         <p className="text-xs text-[var(--color-text-muted)]">
-          Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil.
+          Teil auf den Plan ziehen oder anklicken und dann auf den Plan klicken. Beim Ziehen dreht R, Rechtsklick oder das Mausrad das Teil. Beim Ziehen zeigen Hilfslinien Fluchten, Abstände und das Gesamtmaß in m.
         </p>
         <div className="flex flex-wrap items-start gap-x-10 gap-y-4">
         {[GALLERY_GROUPS.slice(0, 1), GALLERY_GROUPS.slice(1)].map((column, colIdx) => (
