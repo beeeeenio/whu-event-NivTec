@@ -180,6 +180,8 @@ function App() {
 
   // Verlassen der Nur-Lesen-Ansicht: Hash weg, eigener Entwurf bleibt wie er war.
   function leaveShared() {
+    // Ein noch laufendes Dekodieren darf die gerade verlassene Ansicht nicht wieder öffnen.
+    shareLoadSeq.current++;
     setShared(null);
     setShareError(null);
     history.replaceState(null, '', location.pathname + location.search);
