@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 're
 import {
   findFreePosition,
   fitsAt,
+  makePieceId,
   placeUnsnapped,
   shiftPieces,
   type FilledPiece,
@@ -16,7 +17,7 @@ import { mirrorPayload, payloadMatches, payloadSize, payloadToFilled, rotatePayl
 import { formatMeters } from '../../lib/format';
 import { dragThresholdPx, isPrimaryButton, shouldRotateOnWheel } from '../../lib/pointer';
 import { createFrameThrottle } from '../../lib/pointerDrag';
-import { isEditableTarget, undoRedoAction } from '../../lib/shortcuts';
+import { editorShortcut, isEditableTarget } from '../../lib/shortcuts';
 import { CanvasGrid } from './editor/CanvasGrid';
 import { DragOverlay } from './editor/DragOverlay';
 import { EditorToolbar } from './editor/EditorToolbar';
@@ -99,6 +100,7 @@ const QUICK_WIDTHS = [2, 1.5, 1, 0.5] as const;
 export function PieceCanvasEditor({
   pieces,
   onAddPieces,
+  onInsertPieces,
   onRemovePiece,
   onMovePiece,
   onMovePieces,
@@ -608,13 +610,19 @@ export function PieceCanvasEditor({
     setSelectedIds([]);
   }
 
-  // Kopiert die Auswahl als Block nach rechts (erste freie Stelle). Ein set()-Aufruf = ein Undo-Schritt;
-  // die Auswahl bleibt beim Original, so baut wiederholtes Strg+D eine Reihe.
+  // Kopiert die Auswahl als Block nach rechts (erste freie Stelle). Ein Einfüge-Aufruf = ein Undo-Schritt.
+  // Die Auswahl springt auf die Kopie, so baut wiederholtes Strg+D die Reihe nach rechts weiter.
   function duplicateSelected() {
     if (selectedIds.length === 0) return;
     const copy = duplicateWithOffset(pieces, selectedIds);
     if (!copy) {
       showBlockedMessage('Kein freier Platz zum Duplizieren gefunden.');
+      return;
+    }
+    if (onInsertPieces) {
+      const withIds = copy.map((p) => ({ ...p, id: makePieceId() }));
+      onInsertPieces(withIds);
+      setSelectedIds(withIds.map((p) => p.id));
       return;
     }
     onAddPieces(copy);
@@ -668,8 +676,6 @@ export function PieceCanvasEditor({
       arm(null);
       return;
     }
-    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') { e.preventDefault(); arm(null); setSelectedIds(pieces.map((p) => p.id)); return; }
-    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSelected(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length > 0) {
       e.preventDefault();
@@ -722,15 +728,29 @@ export function PieceCanvasEditor({
     }
   }
 
-  // Undo/Redo am Container: greift auch, wenn der Fokus auf Palette-Kachel oder Toolbar-Button liegt.
-  // Eingabefelder behalten ihr natives Undo; IME-Eingaben werden ignoriert.
+  // Strg/Cmd-Kurzbefehle am Container: greifen auch, wenn der Fokus auf Palette-Kachel oder Toolbar-Button liegt.
+  // Eingabefelder behalten ihre nativen Tasten; IME-Eingaben werden ignoriert.
+  // Copy/Cut/Paste folgen mit T17 und sind hier vorerst ohne Wirkung.
   function handleEditorKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     if (isEditableTarget(e.target)) return;
-    const action = undoRedoAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey, altKey: e.altKey, isComposing: e.nativeEvent.isComposing });
+    const action = editorShortcut({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey, altKey: e.altKey, isComposing: e.nativeEvent.isComposing });
     if (!action) return;
-    e.preventDefault();
-    if (action === 'undo') onUndo?.();
-    else onRedo?.();
+    if (action === 'undo' || action === 'redo') {
+      e.preventDefault();
+      if (action === 'undo') onUndo?.();
+      else onRedo?.();
+      return;
+    }
+    if (action === 'selectAll') {
+      e.preventDefault();
+      arm(null);
+      setSelectedIds(pieces.map((p) => p.id));
+      return;
+    }
+    if (action === 'duplicate') {
+      e.preventDefault();
+      duplicateSelected();
+    }
   }
 
   // Statuszeile der Toolbar: sagt, was gerade passiert bzw. was als Nächstes zu tun ist.

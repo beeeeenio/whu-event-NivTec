@@ -44,7 +44,7 @@ export function ShortcutHelp() {
           <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+A</kbd> alles auswählen
         </li>
         <li>
-          <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+D</kbd> Auswahl duplizieren (rechts daneben)
+          <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+D</kbd> Auswahl duplizieren – die Kopie wird ausgewählt; wirkt auch nach Klick auf die Leiste
         </li>
         <li>
           <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+Umschalt+Z</kbd> oder

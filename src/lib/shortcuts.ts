@@ -17,6 +17,29 @@ export function undoRedoAction(e: KeyLike): 'undo' | 'redo' | null {
   return null;
 }
 
+export type EditorShortcut = 'undo' | 'redo' | 'selectAll' | 'duplicate' | 'copy' | 'cut' | 'paste';
+
+/** Editor-weite Kurzbefehle (Strg/Cmd); IME und Alt-Kombinationen bleiben unberührt. */
+export function editorShortcut(e: KeyLike): EditorShortcut | null {
+  const history = undoRedoAction(e);
+  if (history) return history;
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.isComposing) return null;
+  switch (e.key.toLowerCase()) {
+    case 'a':
+      return 'selectAll';
+    case 'd':
+      return 'duplicate';
+    case 'c':
+      return 'copy';
+    case 'x':
+      return 'cut';
+    case 'v':
+      return 'paste';
+    default:
+      return null;
+  }
+}
+
 /** Eingabefelder (inkl. Auswahllisten und contenteditable) behalten ihr natives Undo/Redo und ihre Tasten. */
 export function isEditableTarget(target: unknown): boolean {
   const el = target as { tagName?: unknown; isContentEditable?: unknown } | null | undefined;
