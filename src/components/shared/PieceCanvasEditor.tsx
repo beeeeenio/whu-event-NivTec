@@ -25,10 +25,13 @@ import { PieceShape } from './editor/PieceShape';
 import { ShortcutHelp } from './editor/ShortcutHelp';
 import type { DragState, PaletteDragState } from './editor/types';
 import { usePointerDrag } from '../../hooks/usePointerDrag';
+import { pruneSelection } from '../../lib/pieceLayerProps';
 
 interface Props {
   pieces: Piece2D[];
   onAddPieces: (pieces: FilledPiece[]) => void;
+  /** Fügt Stücke mit bereits vergebenen IDs ein (ein Undo-Schritt) — nötig, um die Kopie danach auszuwählen. */
+  onInsertPieces?: (pieces: Piece2D[]) => void;
   onRemovePiece: (id: string) => void;
   onMovePiece: (id: string, x: number, y: number) => void;
   /** Verschiebt mehrere Stücke gemeinsam um (dx, dy) — ein Undo-Schritt für die ganze Auswahl. */
@@ -122,6 +125,13 @@ export function PieceCanvasEditor({
   // Alt gedrückt beim Platzieren: freie Lage ohne Einrasten, Überlappung wird rot angezeigt.
   const [altHeld, setAltHeld] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Undo/Redo oder Import können ausgewählte Stücke entfernen: IDs ohne Stück nicht festhalten.
+  // Beim Wechsel der Stückliste direkt im Render nachziehen (kein Effekt, damit kein Zwischen-Render mit Geister-Auswahl entsteht).
+  const [selectionPiecesRef, setSelectionPiecesRef] = useState(pieces);
+  if (selectionPiecesRef !== pieces) {
+    setSelectionPiecesRef(pieces);
+    setSelectedIds((cur) => pruneSelection(cur, pieces));
+  }
   // Einzelauswahl (Drehen/Spiegeln/Pfeiltasten) gilt nur bei genau einem ausgewählten Stück;
   // mit Umschalt+Klick lassen sich mehrere auswählen, die dann gemeinsam gelöscht werden.
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
