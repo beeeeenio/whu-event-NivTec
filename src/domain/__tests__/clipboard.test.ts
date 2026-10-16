@@ -125,6 +125,28 @@ describe('clipboard', () => {
     it('liefert null bei leerer Payload', () => {
       expect(placeClipboard([], { ...payload, pieces: [] }, null)).toBeNull();
     });
+
+    it('ohne Anker startet rechts neben den Stücken, nicht hinter einem Raum-Blocker', () => {
+      const existing: Piece2D[] = [{ id: 'e', x: 0, y: 0, w: 2, d: 1 }];
+      // Säule bei x 6–7: der Startpunkt richtet sich nur nach dem Bestand (maxX=2), nicht nach dem Blocker.
+      const blocker: Piece2D = { id: 'room:ob-1', x: 6, y: 0, w: 1, d: 1 };
+      const placed = placeClipboard(existing, payload, null, 0.5, [blocker]);
+      expect(placed).toEqual([
+        { x: 2, y: 0, w: 2, d: 1 },
+        { x: 4, y: 0, w: 1, d: 1 },
+      ]);
+    });
+
+    it('weicht Blocker-Stücken aus, ohne sie ins Ergebnis zu nehmen', () => {
+      const blocker: Piece2D = { id: 'room:ob-2', x: 2, y: 0, w: 1, d: 1 };
+      const placed = placeClipboard([], payload, null, 0.5, [blocker]);
+      // Die Kopie (2 m + 1 m) träfe die Säule bei x 2–3; die erste freie Stelle ist x=3.
+      expect(placed).toEqual([
+        { x: 3, y: 0, w: 2, d: 1 },
+        { x: 5, y: 0, w: 1, d: 1 },
+      ]);
+      expect(JSON.stringify(placed)).not.toContain('room:');
+    });
   });
 
   describe('Zwischenablage im Speicher', () => {

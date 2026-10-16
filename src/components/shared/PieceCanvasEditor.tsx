@@ -24,6 +24,7 @@ import {
 import { alignmentGuides, nearestGaps, unionBounds, type Rect } from '../../domain/smartGuides';
 import { isSondermassPiece, TRIANGLE_PANEL_SIZE_M } from '../../domain/panels';
 import { triangleHand } from '../../domain/triangle';
+import { rectInsideRoom, roomBlockers, type RoomPlan } from '../../domain/room';
 import { mirrorPayload, payloadMatches, payloadSize, payloadToFilled, payloadToFilledPieces, rotatePayload, type ToolPayload } from '../../domain/toolPayload';
 import { deleteBlock, listBlocks, saveBlock, selectionToBlock, subscribeBlocks, type SavedBlock } from '../../lib/blocks';
 import { formatMeters } from '../../lib/format';
@@ -33,6 +34,7 @@ import { panBy, pinchFactor, touchGestureIntent, viewBoxToString, zoomAt, zoomLe
 import { editorShortcut, isEditableTarget } from '../../lib/shortcuts';
 import { ACTION_BTN } from './editor/styles';
 import { CanvasGrid } from './editor/CanvasGrid';
+import { RoomLayer } from './editor/RoomLayer';
 import { DragOverlay } from './editor/DragOverlay';
 import { EditorToolbar } from './editor/EditorToolbar';
 import { PiecePalette } from './editor/PiecePalette';
@@ -56,6 +58,8 @@ interface MarqueeState {
 
 /** Abstand des Auswahlrahmens um die Gruppe (Meter). */
 const SELECTION_FRAME_GAP_M = 0.06;
+/** Meldung, wenn im Raum für ein Stück keine Stelle mehr frei ist (das Ablegen wird dann nicht ausgeführt). */
+const ROOM_FULL_TEXT = 'Im Raum ist kein freier Platz für dieses Stück.';
 
 interface Props {
   pieces: Piece2D[];
@@ -96,6 +100,8 @@ interface Props {
    *  Platten gar nicht liegen, sobald diese Ebene versetzt statt vorderkantenbündig gebaut wurde
    *  (siehe boundingBoxOf in customShape.ts). */
   referenceFootprint?: { x: number; y: number; widthM: number; depthM: number; label?: string };
+  /** Raumkontur mit Hindernissen; Hindernisse und Außenbereich gelten als belegt. */
+  room?: RoomPlan;
 }
 
 const PAD = 0.6;
@@ -174,6 +180,7 @@ export function PieceCanvasEditor({
   frontEdgeLabel = 'Vorderkante',
   minCanvasWidthM,
   referenceFootprint,
+  room,
 }: Props) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const svgRef = useRef<SVGSVGElement>(null);
@@ -330,13 +337,18 @@ export function PieceCanvasEditor({
     if (pieces.length > 0) setClearedSnack(false);
   }
 
+  // Raum-Hindernisse und Außenbereich (nur mit room) gelten wie belegte Stücke; die Stückliste selbst bleibt `pieces`.
+  const blockers = useMemo(() => roomBlockers(room), [room]);
+  const occupied = useMemo(() => [...pieces, ...blockers], [pieces, blockers]);
   const contentWidthM = Math.max(
     pieces.reduce((m, p) => Math.max(m, p.x + p.w), 0),
     referenceFootprint ? referenceFootprint.x + referenceFootprint.widthM : 0,
+    room ? room.widthM : 0,
   );
   const contentDepthM = Math.max(
     pieces.reduce((m, p) => Math.max(m, p.y + p.d), 0),
     referenceFootprint ? referenceFootprint.y + referenceFootprint.depthM : 0,
+    room ? room.depthM : 0,
   );
   const canvasWidthM = Math.max(minCanvasWidthM ?? 0, MIN_CANVAS_WIDTH_M, contentWidthM + BUFFER_M);
   const canvasDepthM = Math.max(MIN_CANVAS_DEPTH_M, contentDepthM + BUFFER_M);
@@ -390,6 +402,13 @@ export function PieceCanvasEditor({
     return { snapToleranceM: SNAP_TOLERANCE_PX * metersPerPx };
   }
 
+  // Platzsuche gegen belegte Flächen (Stücke und Raum). Liegt die gefundene Lage außerhalb des Raums
+  // (voller Raum), ist sie ungültig: dann wird nichts abgelegt bzw. rot gezeigt, nie ein Stück weit außen.
+  function snappedPlacement(w: number, d: number, desiredX: number, desiredY: number, excludeId?: string, options?: PlacementOptions): { x: number; y: number; valid: boolean } {
+    const pos = findFreePosition(occupied, w, d, desiredX, desiredY, excludeId, options);
+    return { ...pos, valid: rectInsideRoom({ x: pos.x, y: pos.y, w, d }, room) };
+  }
+
   // Bedient sowohl den Klick-Bewaffnen-Hover als auch das Ziehen aus der Palette (sobald der
   // Cursor über dem Canvas ist) — eine einzige Vorschau-Quelle für beide Wege.
   function previewForPayload(payload: ToolPayload | null): (FilledPiece & { valid?: boolean })[] | null {
@@ -398,16 +417,17 @@ export function PieceCanvasEditor({
       // Baustein: ohne Einrasten an Kanten, sondern als Ganzes am Anker; Kollision wird rot angezeigt.
       const anchor = blockAnchor(payload, pointerPos, altHeld);
       const filled = payloadToFilledPieces(payload, anchor.x, anchor.y);
-      const valid = fitsAllAt(pieces, filled);
+      const valid = fitsAllAt(occupied, filled);
       return filled.map((f) => ({ ...f, valid }));
     }
     const { w, d } = payloadSize(payload);
     if (altHeld) {
-      const free = placeUnsnapped(pieces, w, d, pointerPos.x - w / 2, pointerPos.y - d / 2);
+      const free = placeUnsnapped(occupied, w, d, pointerPos.x - w / 2, pointerPos.y - d / 2);
       return [{ ...payloadToFilled(payload, free.x, free.y), valid: free.valid }];
     }
-    const pos = findFreePosition(pieces, w, d, pointerPos.x - w / 2, pointerPos.y - d / 2, undefined, placementOptions());
-    return [payloadToFilled(payload, pos.x, pos.y)];
+    // Außerhalb des Raums (voller Raum) rot statt als gültige Vorschau.
+    const pos = snappedPlacement(w, d, pointerPos.x - w / 2, pointerPos.y - d / 2, undefined, placementOptions());
+    return [{ ...payloadToFilled(payload, pos.x, pos.y), valid: pos.valid }];
   }
 
   // arm(null) beim Start eines Paletten-Ziehens sorgt dafür, dass armed/paletteDrag nie
@@ -428,10 +448,12 @@ export function PieceCanvasEditor({
         ? { x: previewSingle.x, y: previewSingle.y, w: previewSingle.w, d: previewSingle.d }
         : null;
   const others = liveRect ? shownPieces.filter((p) => !(draggedPiece && p.id === draggedPiece.id)) : [];
+  // Raum-Hindernisse sind Nachbarn für Hilfslinien und Abstände; das Gesamtmaß (total) bleibt bei den Stücken.
+  const guideNeighbors = room ? [...others, ...room.obstacles] : others;
   const liveGeometry = liveRect
     ? {
-        guides: alignmentGuides(liveRect, others),
-        gaps: nearestGaps(liveRect, others),
+        guides: alignmentGuides(liveRect, guideNeighbors),
+        gaps: nearestGaps(liveRect, guideNeighbors),
         total: others.length > 0 ? unionBounds([...others, liveRect]) : null,
         px: metersPerPx,
       }
@@ -445,7 +467,7 @@ export function PieceCanvasEditor({
     if (payload.kind === 'block') {
       const anchor = blockAnchor(payload, pos, free);
       const filled = payloadToFilledPieces(payload, anchor.x, anchor.y);
-      if (!fitsAllAt(pieces, filled)) {
+      if (!fitsAllAt(occupied, filled)) {
         showBlockedMessage('Dort ist kein Platz für den Baustein – nichts platziert.');
         return;
       }
@@ -455,7 +477,7 @@ export function PieceCanvasEditor({
     }
     const { w, d } = payloadSize(payload);
     if (free) {
-      const exact = placeUnsnapped(pieces, w, d, pos.x - w / 2, pos.y - d / 2);
+      const exact = placeUnsnapped(occupied, w, d, pos.x - w / 2, pos.y - d / 2);
       if (!exact.valid) {
         showBlockedMessage('Dort ist kein Platz – nichts platziert.');
         return;
@@ -463,7 +485,11 @@ export function PieceCanvasEditor({
       onAddPieces([payloadToFilled(payload, exact.x, exact.y)]);
       return;
     }
-    const target = findFreePosition(pieces, w, d, pos.x - w / 2, pos.y - d / 2, undefined, placementOptions());
+    const target = snappedPlacement(w, d, pos.x - w / 2, pos.y - d / 2, undefined, placementOptions());
+    if (!target.valid) {
+      showBlockedMessage(ROOM_FULL_TEXT);
+      return;
+    }
     onAddPieces([payloadToFilled(payload, target.x, target.y)]);
   }
 
@@ -699,8 +725,8 @@ export function PieceCanvasEditor({
     const oy = cy - after.d / 2;
     const target =
       cur.target.valid === false
-        ? placeUnsnapped(pieces, after.w, after.d, ox, oy, piece.id)
-        : { ...findFreePosition(pieces, after.w, after.d, ox, oy, piece.id, placementOptions()), valid: true };
+        ? placeUnsnapped(occupied, after.w, after.d, ox, oy, piece.id)
+        : snappedPlacement(after.w, after.d, ox, oy, piece.id, placementOptions());
     const next: DragState = { ...cur, rotations: turns, target };
     dragRef.current = next;
     dragThrottle.push(next);
@@ -752,17 +778,17 @@ export function PieceCanvasEditor({
           dy = Math.max(-minY, Math.round((y - cur.group.startY) * 100) / 100);
         } else {
           // Einrasten an Kanten der übrigen Stücke, sonst aufs Raster.
-          ({ dx, dy } = snapGroupDelta(pieces, selectedIds, x - cur.group.startX, y - cur.group.startY, SNAP_TOLERANCE_PX * metersPerPx));
+          ({ dx, dy } = snapGroupDelta(pieces, selectedIds, x - cur.group.startX, y - cur.group.startY, SNAP_TOLERANCE_PX * metersPerPx, GRID_STEP_M, blockers));
         }
-        const valid = checkGroupMove(pieces, selectedIds, dx, dy) === 'ok';
+        const valid = checkGroupMove(pieces, selectedIds, dx, dy, blockers) === 'ok';
         if (cur.moved && cur.group.dx === dx && cur.group.dy === dy && cur.group.valid === valid) return;
         next = { ...cur, moved: true, group: { ...cur.group, dx, dy, valid } };
       } else {
         // Mit gedrehten Maßen rechnen (Drehen während des Ziehens, siehe rotateDraggedPiece).
         const shape = rotatedBy(piece, cur.rotations ?? 0);
         const target = e.altKey
-          ? placeUnsnapped(pieces, shape.w, shape.d, x - cur.grabOffset.x, y - cur.grabOffset.y, piece.id)
-          : { ...findFreePosition(pieces, shape.w, shape.d, x - cur.grabOffset.x, y - cur.grabOffset.y, piece.id, placementOptions()), valid: true };
+          ? placeUnsnapped(occupied, shape.w, shape.d, x - cur.grabOffset.x, y - cur.grabOffset.y, piece.id)
+          : snappedPlacement(shape.w, shape.d, x - cur.grabOffset.x, y - cur.grabOffset.y, piece.id, placementOptions());
         if (cur.moved && cur.target && cur.target.x === target.x && cur.target.y === target.y && cur.target.valid === target.valid) return;
         next = { ...cur, moved: true, target };
       }
@@ -790,7 +816,10 @@ export function PieceCanvasEditor({
           showBlockedMessage('Dort ist kein Platz – die Auswahl würde andere Stücke überlappen. Nichts verschoben.');
         }
       } else if (cur.moved && cur.target?.valid === false) {
-        showBlockedMessage('Dort ist kein Platz – das Stück würde ein anderes überlappen. Nichts verschoben.');
+        // Außerhalb des Raums (voller Raum): eigene Meldung, sonst das Überlappen mit einem anderen Stück.
+        const sz = rotatedBy(piece, cur.rotations ?? 0);
+        const inRoom = rectInsideRoom({ x: cur.target.x, y: cur.target.y, w: sz.w, d: sz.d }, room);
+        showBlockedMessage(inRoom ? 'Dort ist kein Platz – das Stück würde ein anderes überlappen. Nichts verschoben.' : ROOM_FULL_TEXT);
       } else if (cur.moved && cur.target) {
         const { x: tx, y: ty } = cur.target;
         const turns = cur.rotations ?? 0;
@@ -1019,7 +1048,7 @@ export function PieceCanvasEditor({
   function rotateSelected() {
     // Mehrfachauswahl: als Block um die Mitte drehen (nur mit onReplaceAll).
     if (selectedIds.length > 1 && onReplaceAll) {
-      const next = rotateGroupAroundCenter(pieces, selectedIds);
+      const next = rotateGroupAroundCenter(pieces, selectedIds, GRID_STEP_M, blockers);
       if (next === null) showBlockedMessage('Drehen nicht möglich – die gedrehte Auswahl würde andere Stücke überlappen.');
       else onReplaceAll(next);
       return;
@@ -1027,7 +1056,14 @@ export function PieceCanvasEditor({
     if (!selectedPiece) return;
     // Mit onReplaceAll um den Mittelpunkt drehen, passend zu Ziehen (Kanten-Fang, Nachrücken).
     if (onReplaceAll) {
-      onReplaceAll(rotatePieceAroundCenter(pieces, selectedPiece.id, placementOptions()));
+      const next = rotatePieceAroundCenter(pieces, selectedPiece.id, placementOptions(), blockers);
+      // Die gedrehte Lage darf nicht außerhalb des Raums liegen (voller Raum): dann nichts ändern.
+      const turned = next.find((q) => q.id === selectedPiece.id);
+      if (turned && !rectInsideRoom(turned, room)) {
+        showBlockedMessage(ROOM_FULL_TEXT);
+        return;
+      }
+      onReplaceAll(next);
       return;
     }
     // Ein quadratisches Dreieck (1×1) oder Viertelkreis behält beim Drehen exakt seine Bounding-Box
@@ -1041,7 +1077,7 @@ export function PieceCanvasEditor({
     }
     const rotatedW = selectedPiece.d;
     const rotatedD = selectedPiece.w;
-    if (fitsAt(pieces, selectedPiece.x, selectedPiece.y, rotatedW, rotatedD, selectedPiece.id)) {
+    if (fitsAt(occupied, selectedPiece.x, selectedPiece.y, rotatedW, rotatedD, selectedPiece.id)) {
       onRotatePiece(selectedPiece.id);
       return;
     }
@@ -1049,7 +1085,11 @@ export function PieceCanvasEditor({
     // Achse) — statt hart zu blockieren, wie beim Ziehen die nächstgelegene freie Stelle für die
     // gedrehten Maße suchen und dorthin rücken. findFreePosition liefert für ein Einzelstück
     // immer ein Ergebnis (siehe customShape.ts), ein echter Fehlerfall entfällt damit.
-    const target = findFreePosition(pieces, rotatedW, rotatedD, selectedPiece.x, selectedPiece.y, selectedPiece.id);
+    const target = snappedPlacement(rotatedW, rotatedD, selectedPiece.x, selectedPiece.y, selectedPiece.id);
+    if (!target.valid) {
+      showBlockedMessage(ROOM_FULL_TEXT);
+      return;
+    }
     batch(() => {
       onMovePiece(selectedPiece.id, target.x, target.y);
       onRotatePiece(selectedPiece.id);
@@ -1083,7 +1123,7 @@ export function PieceCanvasEditor({
   // Die Auswahl springt auf die Kopie, so baut wiederholtes Strg+D die Reihe nach rechts weiter.
   function duplicateSelected() {
     if (selectedIds.length === 0) return;
-    const copy = duplicateWithOffset(pieces, selectedIds);
+    const copy = duplicateWithOffset(pieces, selectedIds, 20, blockers);
     if (!copy) {
       showBlockedMessage('Kein freier Platz zum Duplizieren gefunden.');
       return;
@@ -1113,7 +1153,7 @@ export function PieceCanvasEditor({
   function nudgeSelection(ux: number, uy: number, step: number) {
     const dx = round1(ux * step);
     const dy = round1(uy * step);
-    const result = checkGroupMove(pieces, selectedIds, dx, dy);
+    const result = checkGroupMove(pieces, selectedIds, dx, dy, blockers);
     if (result !== 'ok') {
       showBlockedMessage(groupBlockedText(result));
       return;
@@ -1151,11 +1191,15 @@ export function PieceCanvasEditor({
     if (selectedIds.length === 1) {
       const piece = pieces.find((q) => q.id === selectedIds[0]);
       if (!piece) return;
-      const pos = findFreePosition(pieces, piece.w, piece.d, p.x, p.y, piece.id, placementOptions());
+      const pos = snappedPlacement(piece.w, piece.d, p.x, p.y, piece.id, placementOptions());
+      if (!pos.valid) {
+        showBlockedMessage(ROOM_FULL_TEXT);
+        return;
+      }
       if (pos.x !== piece.x || pos.y !== piece.y) onMovePiece(piece.id, pos.x, pos.y);
       return;
     }
-    const { dx, dy, result } = moveGroupTo(pieces, selectedIds, p.x, p.y, GRID_STEP_M);
+    const { dx, dy, result } = moveGroupTo(pieces, selectedIds, p.x, p.y, GRID_STEP_M, blockers);
     if (result !== 'ok') {
       showBlockedMessage(groupBlockedText(result));
       return;
@@ -1302,7 +1346,7 @@ export function PieceCanvasEditor({
 
   // Fügt die Zwischenablage an der Mausposition ein (sonst rechts neben dem Bestand). Die Kopie wird danach ausgewählt.
   function pastePayload(payload: PiecesClipboardPayload) {
-    const placed = placeClipboard(piecesRef.current, payload, lastPointerRef.current);
+    const placed = placeClipboard(piecesRef.current, payload, lastPointerRef.current, GRID_STEP_M, blockers);
     if (!placed) {
       showBlockedMessage('Kein freier Platz zum Einfügen gefunden.');
       return;
@@ -1525,6 +1569,7 @@ export function PieceCanvasEditor({
           gridStepM={GRID_STEP_M}
           pad={PAD}
         />
+        {room && <RoomLayer room={room} px={metersPerPx} />}
 
         <rect
           x={0}
@@ -1731,7 +1776,7 @@ export function PieceCanvasEditor({
           key={selectedPiece.id}
           piece={selectedPiece}
           onApply={(edit) => {
-            const r = validatePieceEdit(pieces, selectedPiece.id, edit);
+            const r = validatePieceEdit(pieces, selectedPiece.id, edit, blockers);
             if (!r.ok) return r.reason;
             // Ohne Änderung keine neue Rückgängig-Stufe.
             if (r.pieces !== pieces) onReplaceAll(r.pieces);

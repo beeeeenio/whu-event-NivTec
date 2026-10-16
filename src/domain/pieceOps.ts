@@ -53,21 +53,25 @@ export function movePiecesBy(pieces: Piece2D[], ids: readonly string[], dx: numb
 
 export type GroupMoveCheck = 'ok' | 'out-of-bounds' | 'collision';
 
-/** Prüft, ob die Stücke `ids` gemeinsam um (dx, dy) verschoben werden können. Ausgewählte Stücke stoßen nicht aneinander. */
-export function checkGroupMove(pieces: Piece2D[], ids: readonly string[], dx: number, dy: number): GroupMoveCheck {
+/**
+ * Prüft, ob die Stücke `ids` gemeinsam um (dx, dy) verschoben werden können. Ausgewählte Stücke stoßen nicht aneinander.
+ * `blockers` sind feste Stücke (Raum-Hindernisse, andere Ebene): sie kollidieren, landen aber nie im Ergebnis.
+ */
+export function checkGroupMove(pieces: Piece2D[], ids: readonly string[], dx: number, dy: number, blockers: readonly Piece2D[] = []): GroupMoveCheck {
   const set = new Set(ids);
   const moving = pieces.filter((p) => set.has(p.id));
   if (moving.length === 0) return 'ok';
   if (moving.some((p) => p.x + dx < -1e-6 || p.y + dy < -1e-6)) return 'out-of-bounds';
-  const others = pieces.filter((p) => !set.has(p.id));
+  const others = [...pieces.filter((p) => !set.has(p.id)), ...blockers];
   return moving.every((p) => fitsAt(others, p.x + dx, p.y + dy, p.w, p.d)) ? 'ok' : 'collision';
 }
 
 /**
  * Versatz, um die Auswahl mit der linken oberen Ecke ihrer Bounding-Box auf (targetX, targetY) zu setzen (aufs Raster gerundet, nicht negativ), samt Prüfergebnis.
  * Dient dem Verschieben ohne Ziehen (Ziel antippen): der Versatz ist relativ zur Bounding-Box der Auswahl.
+ * `blockers` werden wie bei checkGroupMove geprüft, landen aber nie im Ergebnis.
  */
-export function moveGroupTo(pieces: Piece2D[], ids: readonly string[], targetX: number, targetY: number, gridM = 0.5): { dx: number; dy: number; result: GroupMoveCheck } {
+export function moveGroupTo(pieces: Piece2D[], ids: readonly string[], targetX: number, targetY: number, gridM = 0.5, blockers: readonly Piece2D[] = []): { dx: number; dy: number; result: GroupMoveCheck } {
   const set = new Set(ids);
   const moving = pieces.filter((p) => set.has(p.id));
   if (moving.length === 0) return { dx: 0, dy: 0, result: 'ok' };
@@ -77,7 +81,7 @@ export function moveGroupTo(pieces: Piece2D[], ids: readonly string[], targetX: 
   const ty = Math.max(0, Math.round(targetY / gridM) * gridM);
   const dx = r3(tx - minX);
   const dy = r3(ty - minY);
-  return { dx, dy, result: checkGroupMove(pieces, ids, dx, dy) };
+  return { dx, dy, result: checkGroupMove(pieces, ids, dx, dy, blockers) };
 }
 
 /**
@@ -92,9 +96,10 @@ export function removePiecesByIds(pieces: Piece2D[], ids: readonly string[]): Pi
 
 /**
  * Kopie der Stücke `ids` (ohne id), als Block um k × Blockbreite nach rechts versetzt (k = 1..maxSteps, erste freie Stelle).
+ * `blockers` werden ausgewichen (z. B. Raum-Hindernisse); sie landen nie im Ergebnis.
  * null, wenn ids leer sind oder nichts frei ist.
  */
-export function duplicateWithOffset(pieces: Piece2D[], ids: readonly string[], maxSteps = 20): FilledPiece[] | null {
+export function duplicateWithOffset(pieces: Piece2D[], ids: readonly string[], maxSteps = 20, blockers: readonly Piece2D[] = []): FilledPiece[] | null {
   const set = new Set(ids);
   const sel = pieces.filter((p) => set.has(p.id));
   if (sel.length === 0) return null;
@@ -111,7 +116,7 @@ export function duplicateWithOffset(pieces: Piece2D[], ids: readonly string[], m
       ...(p.corner !== undefined ? { corner: p.corner } : {}),
       ...(p.shape !== undefined ? { shape: p.shape } : {}),
     }));
-    if (fitsAllAt(pieces, copy)) return copy;
+    if (fitsAllAt([...pieces, ...blockers], copy)) return copy;
   }
   return null;
 }
@@ -147,12 +152,13 @@ export function mirrorPieceById(pieces: Piece2D[], id: string): Piece2D[] {
 
 /**
  * Rastet den Versatz einer Gruppe an Kanten der übrigen Stücke (Bounding-Box der Gruppe, Anfang/Ende), sonst aufs Raster; nie links/oben über 0.
+ * Kanten von `blockers` (Raum-Hindernisse) zählen wie die von Nachbarstücken, landen aber nie im Ergebnis.
  */
-export function snapGroupDelta(pieces: Piece2D[], ids: readonly string[], rawDx: number, rawDy: number, toleranceM: number, gridM = 0.5): { dx: number; dy: number } {
+export function snapGroupDelta(pieces: Piece2D[], ids: readonly string[], rawDx: number, rawDy: number, toleranceM: number, gridM = 0.5, blockers: readonly Piece2D[] = []): { dx: number; dy: number } {
   const set = new Set(ids);
   const moving = pieces.filter((p) => set.has(p.id));
   if (moving.length === 0) return { dx: 0, dy: 0 };
-  const others = pieces.filter((p) => !set.has(p.id));
+  const others = [...pieces.filter((p) => !set.has(p.id)), ...blockers];
   const minX = Math.min(...moving.map((p) => p.x));
   const maxX = Math.max(...moving.map((p) => p.x + p.w));
   const minY = Math.min(...moving.map((p) => p.y));

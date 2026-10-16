@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { addFilledPieces, checkGroupMove, duplicateWithOffset, moveGroupTo, movePieceTo, movePiecesBy, piecesInRect, removePieceById, removePiecesByIds, rotateGroupAroundCenter, rotatePieceAroundCenter, rotatePieceById, snapGroupDelta, validatePieceEdit } from '../pieceOps';
 import { fitsAt, type Piece2D } from '../customShape';
+import { ROOM_BLOCKER_PREFIX, roomBlockers, type RoomPlan } from '../room';
 
 describe('pieceOps', () => {
   let piece1: Piece2D;
@@ -484,6 +485,56 @@ describe('Kanten-Snapping und Drehen um den Mittelpunkt', () => {
     it('liefert ohne Auswahl einen Nullversatz', () => {
       expect(moveGroupTo([a, b], [], 2, 2)).toEqual({ dx: 0, dy: 0, result: 'ok' });
     });
+  });
+});
+
+describe('Raum-Blocker (blockers) in pieceOps', () => {
+  // Raum 6 × 4 m mit einer Säule bei x 2–3, y 1–2. Außen (rechts ab x=6, hinten ab y=4) gilt als belegt.
+  const room: RoomPlan = { widthM: 6, depthM: 4, obstacles: [{ id: 'ob-1', kind: 'saeule', x: 2, y: 1, w: 1, d: 1 }] };
+  const blockers = roomBlockers(room);
+  const stage: Piece2D[] = [{ id: 'a', x: 0, y: 0, w: 2, d: 1 }];
+
+  it('checkGroupMove meldet Kollision mit einem Blocker, ohne Blocker dagegen ok', () => {
+    // Versatz (1.5, 0.5): das Stück liegt dann auf der Säule.
+    expect(checkGroupMove(stage, ['a'], 1.5, 0.5, blockers)).toBe('collision');
+    expect(checkGroupMove(stage, ['a'], 1.5, 0.5)).toBe('ok');
+  });
+
+  it('checkGroupMove: Außenbereich rechts des Raums ist belegt', () => {
+    expect(checkGroupMove(stage, ['a'], 5, 0, blockers)).toBe('collision');
+  });
+
+  it('duplicateWithOffset weicht einem Blocker aus', () => {
+    // Die erste Kopie (x=2) träfe den Blocker bei x 2–3; die nächste freie Stelle ist x=4.
+    const blk: Piece2D = { id: 'room:blk', x: 2, y: 0, w: 1, d: 1 };
+    expect(duplicateWithOffset(stage, ['a'], 20, [blk])).toEqual([{ x: 4, y: 0, w: 2, d: 1 }]);
+  });
+
+  it('duplicateWithOffset liefert null, wenn der Blocker alles versperrt', () => {
+    const wall: Piece2D = { id: 'room:wand', x: 0, y: 0, w: 1000, d: 1000 };
+    expect(duplicateWithOffset(stage, ['a'], 20, [wall])).toBeNull();
+  });
+
+  it('snapGroupDelta rastet an der Kante eines Blockers', () => {
+    // Blockerkante bei x=5.2 ergibt Versatz 3.2 (Gruppenkante 2 + 3.2 = 5.2); ohne Blocker bliebe es beim Raster (3.0).
+    const blk: Piece2D = { id: 'room:kante', x: 5.2, y: 3, w: 1, d: 1 };
+    expect(snapGroupDelta(stage, ['a'], 3.1, 0, 0.2, 0.5, [blk]).dx).toBe(3.2);
+    expect(snapGroupDelta(stage, ['a'], 3.1, 0, 0.2).dx).toBe(3);
+  });
+
+  it('moveGroupTo meldet Kollision mit einem Blocker', () => {
+    const r = moveGroupTo(stage, ['a'], 2.5, 0.5, 0.5, blockers);
+    expect(r).toEqual({ dx: 2.5, dy: 0.5, result: 'collision' });
+    expect(moveGroupTo(stage, ['a'], 2.5, 0.5, 0.5).result).toBe('ok');
+  });
+
+  it('keine Rückgabe enthält Blocker-IDs mit Präfix room:', () => {
+    const dup = duplicateWithOffset(stage, ['a'], 20, blockers);
+    expect(dup).not.toBeNull();
+    expect(JSON.stringify(dup)).not.toContain(ROOM_BLOCKER_PREFIX);
+    expect(JSON.stringify(snapGroupDelta(stage, ['a'], 1, 1, 0.5, 0.5, blockers))).not.toContain(ROOM_BLOCKER_PREFIX);
+    expect(JSON.stringify(moveGroupTo(stage, ['a'], 1, 1, 0.5, blockers))).not.toContain(ROOM_BLOCKER_PREFIX);
+    expect(stage.map((p) => p.id)).toEqual(['a']);
   });
 });
 

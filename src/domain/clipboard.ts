@@ -73,12 +73,15 @@ export function parseClipboard(text: string): PiecesClipboardPayload | null {
  * Lage für die eingefügten Stücke: am Anker (auf das Raster gerastet, nie links/oben über 0), sonst
  * rechts neben dem Bestand auf y=0. Wenn die Stelle belegt ist, wird in Rasterschritten nach rechts
  * ausgewichen (höchstens 40 Schritte). null, wenn nichts passt.
+ * `blockers` (Raum-Hindernisse, andere Ebene) gelten als belegt. Der Startpunkt ohne Anker richtet sich nur
+ * nach dem Bestand, nicht nach den Blockern — sonst läge er hinter dem rechten Raum-Blocker.
  */
 export function placeClipboard(
   existing: Piece2D[],
   payload: PiecesClipboardPayload,
   anchor: { x: number; y: number } | null,
   gridM = 0.5,
+  blockers: readonly Piece2D[] = [],
 ): FilledPiece[] | null {
   if (payload.pieces.length === 0) return null;
   // Die Stücke werden relativ zu ihrer linken oberen Ecke gesetzt, auch wenn die Payload nicht normalisiert ist.
@@ -103,7 +106,7 @@ export function placeClipboard(
       x: r3(sx + (p.x - minX)),
       y: r3(start.y + (p.y - minY)),
     }));
-    if (fitsAllAt(existing, shifted)) return shifted;
+    if (fitsAllAt([...existing, ...blockers], shifted)) return shifted;
   }
   return null;
 }
