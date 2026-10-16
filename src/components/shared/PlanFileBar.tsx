@@ -1,5 +1,7 @@
 import { useRef, useState } from 'react';
 import { downloadTextFile } from '../../lib/download';
+import type { PlanKind } from '../../domain/migrations';
+import { buildShareUrl, encodePlanToken, SHARE_URL_WARN_LENGTH } from '../../lib/planShare';
 
 interface Props {
   namespace: string;
@@ -7,14 +9,44 @@ interface Props {
   onLoad: (data: unknown) => string | null;
   /** Import-Bericht des letzten Ladens (z. B. verworfene Stücke) — optional. */
   warnings?: string[];
+  /** Gesetzt: "Link teilen" erscheint und kodiert currentData für diese Plan-Art in den URL-Hash. */
+  shareKind?: PlanKind;
 }
 
-export function PlanFileBar({ namespace, currentData, onLoad, warnings }: Props) {
+const ACTION_CLASS =
+  'px-3 py-1.5 rounded-md text-sm border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] hover:border-[var(--color-accent)]';
+
+export function PlanFileBar({ namespace, currentData, onLoad, warnings, shareKind }: Props) {
   const [importError, setImportError] = useState<string | null>(null);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [shareCopied, setShareCopied] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   function handleExportFile() {
     downloadTextFile(`nivtec-${namespace}.json`, JSON.stringify(currentData, null, 2), 'application/json;charset=utf-8');
+  }
+
+  async function handleShare() {
+    if (!shareKind) return;
+    setShareError(null);
+    try {
+      const token = await encodePlanToken(shareKind, currentData);
+      const url = buildShareUrl(location.href, token);
+      // Kopieren kann am Browser oder an fehlender Berechtigung scheitern — dann bleibt der Link sichtbar zum Markieren.
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(url);
+        copied = true;
+      } catch {
+        copied = false;
+      }
+      setShareUrl(url);
+      setShareCopied(copied);
+    } catch {
+      setShareUrl(null);
+      setShareError('Der Link konnte nicht erzeugt werden.');
+    }
   }
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -31,25 +63,49 @@ export function PlanFileBar({ namespace, currentData, onLoad, warnings }: Props)
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        className="px-3 py-1.5 rounded-md text-sm border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] hover:border-[var(--color-accent)]"
-      >
+      <button type="button" onClick={() => fileInputRef.current?.click()} className={ACTION_CLASS}>
         Plan-Datei öffnen
       </button>
-      <button
-        type="button"
-        onClick={handleExportFile}
-        className="px-3 py-1.5 rounded-md text-sm border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] hover:border-[var(--color-accent)]"
-      >
+      <button type="button" onClick={handleExportFile} className={ACTION_CLASS}>
         Plan-Datei herunterladen
       </button>
+      {shareKind && (
+        <button type="button" onClick={() => void handleShare()} className={ACTION_CLASS}>
+          Link teilen
+        </button>
+      )}
       <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleFileChange} className="hidden" />
       <span className="text-xs text-[var(--color-text-muted)]">JSON, z.B. für die Hallenplanung</span>
       {importError && <p className="text-xs text-[var(--color-danger)]">{importError}</p>}
       {!importError && warnings && warnings.length > 0 && (
         <p className="text-xs text-[var(--color-accent)]">Import-Hinweis: {warnings.join(' ')}</p>
+      )}
+      {shareError && <p className="w-full text-xs text-[var(--color-danger)]">{shareError}</p>}
+      {shareUrl && (
+        <div className="w-full space-y-1.5">
+          {shareCopied ? (
+            <p className="text-xs text-[var(--color-accent)]">Link kopiert – wer ihn öffnet, sieht den Plan nur lesend.</p>
+          ) : (
+            <>
+              <p className="text-xs text-[var(--color-text-muted)]">
+                Kopieren hat nicht geklappt. Link zum Markieren und Kopieren – wer ihn öffnet, sieht den Plan nur lesend.
+              </p>
+              <input
+                type="text"
+                readOnly
+                value={shareUrl}
+                onFocus={(e) => e.currentTarget.select()}
+                aria-label="Teilen-Link"
+                className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs text-[var(--color-text)]"
+              />
+            </>
+          )}
+          {shareUrl.length > SHARE_URL_WARN_LENGTH && (
+            <p className="text-xs text-[var(--color-warning)]">
+              Der Link ist sehr lang – manche Programme kürzen ihn. Sicherer ist die Plan-Datei.
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

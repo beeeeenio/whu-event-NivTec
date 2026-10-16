@@ -86,7 +86,19 @@ function LayerHidden({ label, onShow }: { label: string; onShow: () => void }) {
   );
 }
 
-export function TresenConfigurator({ ci }: { ci: CiId }) {
+/**
+ * `shared`: geteilter Plan aus dem URL-Hash (Rohdaten). Solange er offen ist, zeigen alle Anzeigen
+ * ihn nur lesend an; der eigene Entwurf bleibt unverändert. `onLeaveShared` verlässt die Ansicht.
+ */
+export function TresenConfigurator({
+  ci,
+  shared,
+  onLeaveShared,
+}: {
+  ci: CiId;
+  shared?: unknown;
+  onLeaveShared?: () => void;
+}) {
   const [resultTab, setResultTab] = useState<ResultTab>('kennzahlen');
   // Maßketten im Grundriss und in der PPTX (Standard: an).
   const [showPlanDims, setShowPlanDims] = useState(true);
@@ -106,9 +118,33 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
     annotations: [],
   });
   const { set: setDoc, undo, redo, canUndo, canRedo, transact } = doc;
-  const { baseHeightCm, spindelHeightCm, basePieces, topPieces, room, annotations } = doc.value;
+  const own = doc.value;
+
+  // Geteilter Plan (#plan=…): Nur-Lesen-Ansicht. Solange er offen ist, kommen alle Anzeigen aus view;
+  // der eigene Entwurf (own) bleibt unberührt und wird nur für Autosave, Plan-Datei und Stände genutzt.
+  const sharedParsed = useMemo(() => (shared ? parseTresenFile(shared) : null), [shared]);
+  const sharedView = sharedParsed?.ok === true;
+  const view = useMemo<TresenDoc>(
+    () =>
+      sharedParsed?.ok
+        ? {
+            baseHeightCm: sharedParsed.value.baseHeightCm ?? STRUCTURE_RULES.tresen.heightOptionsCm[0],
+            spindelHeightCm: sharedParsed.value.spindelHeightCm ?? SPINDEL_HEIGHT_OPTIONS_CM[1],
+            basePieces: sharedParsed.value.basePieces,
+            topPieces: sharedParsed.value.topPieces,
+            room: sharedParsed.value.room,
+            annotations: sharedParsed.value.annotations ?? [],
+          }
+        : own,
+    [sharedParsed, own],
+  );
+  const { baseHeightCm, spindelHeightCm, basePieces, topPieces, room, annotations } = view;
   const setBaseHeightCm = (v: number) => doc.set((d) => setDocField(d, 'baseHeightCm', v));
   const setSpindelHeightCm = (v: number) => doc.set((d) => setDocField(d, 'spindelHeightCm', v));
+
+  // Im geteilten Plan gibt es weder Sperren noch Ausblenden: alle Ebenen sind sichtbar und nur lesbar.
+  const effBaseView = sharedView ? NO_LAYER_VIEW : baseView;
+  const effTopView = sharedView ? NO_LAYER_VIEW : topView;
 
   const baseEditorProps = useMemo(
     () =>
@@ -241,16 +277,24 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
     return null;
   }
 
+  // Laden aus Datei oder Stand ändert den eigenen Entwurf: dann die geteilte Ansicht verlassen, damit das Ergebnis sichtbar ist.
+  function applyOwnState(data: unknown): string | null {
+    const error = applySavedState(data);
+    if (!error && sharedView) onLeaveShared?.();
+    return error;
+  }
+
   // room nur mitschreiben, wenn gesetzt — Dateien ohne Raum bleiben wie bisher.
+  // Immer aus dem eigenen Entwurf, auch wenn gerade ein geteilter Plan angezeigt wird.
   const currentSavedState: TresenSavedState = {
     schemaVersion: PLAN_SCHEMA_VERSION,
     kind: 'tresen',
-    baseHeightCm,
-    spindelHeightCm,
-    basePieces,
-    topPieces,
-    ...(room ? { room } : {}),
-    ...(annotations.length > 0 ? { annotations } : {}),
+    baseHeightCm: own.baseHeightCm,
+    spindelHeightCm: own.spindelHeightCm,
+    basePieces: own.basePieces,
+    topPieces: own.topPieces,
+    ...(own.room ? { room: own.room } : {}),
+    ...(own.annotations.length > 0 ? { annotations: own.annotations } : {}),
   };
   const { restored, discard, saveError, otherTabChanged, reloadFromOtherTab, dismissOtherTab } = useDraftAutosave(
     'tresen',
@@ -271,9 +315,37 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
           <PlanFileBar
             namespace="tresen"
             currentData={currentSavedState}
-            onLoad={applySavedState}
+            onLoad={applyOwnState}
+            shareKind="tresen"
           />
         </div>
+        {sharedParsed?.ok && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-accent)]">
+            <span>Geteilter Plan – Nur-Lesen-Ansicht. Dein eigener Entwurf bleibt unverändert.</span>
+            <div className="flex shrink-0 gap-3 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!applySavedState(shared)) onLeaveShared?.();
+                }}
+                className="underline"
+              >
+                In meinen Plan übernehmen
+              </button>
+              <button type="button" onClick={onLeaveShared} className="underline">
+                Schließen
+              </button>
+            </div>
+          </div>
+        )}
+        {sharedParsed && !sharedParsed.ok && (
+          <WarningBanner>
+            <span>{sharedParsed.error}</span>{' '}
+            <button type="button" onClick={onLeaveShared} className="text-xs underline">
+              Schließen
+            </button>
+          </WarningBanner>
+        )}
         {importNotes.length > 0 && (
           <WarningBanner onDismiss={() => setImportNotes([])}>Import-Bericht: {importNotes.join(' ')}</WarningBanner>
         )}
@@ -323,11 +395,15 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-semibold text-[var(--color-text)]">Unterbau per Drag & Drop</h2>
-          <LayerToggles view={baseView} onChange={setBaseView} />
+          {!sharedView && <LayerToggles view={baseView} onChange={setBaseView} />}
         </div>
         <div className="flex flex-wrap items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5">
           <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Höhe</span>
-          <HeightSelector heightOptionsCm={STRUCTURE_RULES.tresen.heightOptionsCm} valueCm={baseHeightCm} onChange={setBaseHeightCm} />
+          {sharedView ? (
+            <span className="text-sm font-semibold tabular-nums text-[var(--color-text)]">{baseHeightCm} cm</span>
+          ) : (
+            <HeightSelector heightOptionsCm={STRUCTURE_RULES.tresen.heightOptionsCm} valueCm={baseHeightCm} onChange={setBaseHeightCm} />
+          )}
         </div>
         {bracingRequired && <WarningBanner>Ab 80 cm Unterbauhöhe ist eine Diagonalverstrebung erforderlich.</WarningBanner>}
         {/* Raum nur am Unterbau: Die Thekenplatte steht auf dem Unterbau, nicht auf dem Boden. */}
@@ -340,9 +416,11 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
               </span>
             )}
           </summary>
-          <div className="mt-3">
-            <RoomPanel room={room} onChange={(r) => doc.set((d) => setDocField(d, 'room', r))} />
-          </div>
+          {!sharedView && (
+            <div className="mt-3">
+              <RoomPanel room={room} onChange={(r) => doc.set((d) => setDocField(d, 'room', r))} />
+            </div>
+          )}
         </details>
         {roomConflictCount > 0 && (
           <WarningBanner>
@@ -350,13 +428,14 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
             außerhalb des Raums.
           </WarningBanner>
         )}
-        {baseView.hidden ? (
+        {effBaseView.hidden ? (
           <LayerHidden label="Unterbau" onShow={() => setBaseView((v) => ({ ...v, hidden: false }))} />
         ) : (
           <>
             <PieceCanvasEditor
             {...baseEditorProps}
-            locked={baseView.locked}
+            locked={effBaseView.locked}
+            readOnly={sharedView}
             room={room}
             annotations={annotations}
             onAnnotationsChange={(a) => setDoc((d) => setDocField(d, 'annotations', a))}
@@ -389,7 +468,7 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
               )
             }
           />
-          <PlacedPiecesChips pieces={basePieces} onRemovePiece={baseEditorProps.onRemovePiece} />
+          {!sharedView && <PlacedPiecesChips pieces={basePieces} onRemovePiece={baseEditorProps.onRemovePiece} />}
           </>
         )}
       </section>
@@ -397,12 +476,13 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-semibold text-[var(--color-text)]">Thekenplatte per Drag & Drop</h2>
-          <LayerToggles view={topView} onChange={setTopView} />
+          {!sharedView && <LayerToggles view={topView} onChange={setTopView} />}
         </div>
         <div className="space-y-2.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5">
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Spindelfuß-Ausgleich</span>
-            {SPINDEL_HEIGHT_OPTIONS_CM.map((h) => {
+            {sharedView && <span className="text-sm font-semibold tabular-nums text-[var(--color-text)]">{spindelHeightCm} cm</span>}
+            {!sharedView && SPINDEL_HEIGHT_OPTIONS_CM.map((h) => {
               const active = spindelHeightCm === h;
               return (
                 <button
@@ -420,15 +500,17 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
                 </button>
               );
             })}
-            <button
-              type="button"
-              onClick={setThekeToHalfDepth}
-              disabled={baseLayout.widthM <= 0}
-              title="Ersetzt die Thekenplatte durch eine vorne bündige Fläche in Unterbau-Breite, bei halber Unterbau-Tiefe"
-              className="px-3 py-1.5 rounded-md text-sm border border-[var(--color-accent)] text-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--color-accent)] hover:text-[var(--color-accent-contrast)]"
-            >
-              Breite übernehmen, Tiefe halbieren
-            </button>
+            {!sharedView && (
+              <button
+                type="button"
+                onClick={setThekeToHalfDepth}
+                disabled={baseLayout.widthM <= 0}
+                title="Ersetzt die Thekenplatte durch eine vorne bündige Fläche in Unterbau-Breite, bei halber Unterbau-Tiefe"
+                className="px-3 py-1.5 rounded-md text-sm border border-[var(--color-accent)] text-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--color-accent)] hover:text-[var(--color-accent-contrast)]"
+              >
+                Breite übernehmen, Tiefe halbieren
+              </button>
+            )}
           </div>
           <p className="text-xs text-[var(--color-text-muted)]">
             Praxis-Tipp: Die Thekenplatte ist meist genauso <strong>breit</strong> wie der Unterbau, aber nur halb so
@@ -436,18 +518,19 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
             zeigt den aktuellen Unterbau zum Vergleich.
           </p>
         </div>
-        {topView.hidden ? (
+        {effTopView.hidden ? (
           <LayerHidden label="Thekenplatte" onShow={() => setTopView((v) => ({ ...v, hidden: false }))} />
         ) : (
           <>
             <PieceCanvasEditor
               {...topEditorProps}
-              locked={topView.locked}
+              locked={effTopView.locked}
+              readOnly={sharedView}
               frontEdgeLabel="Thekenplatten-Vorderkante"
               minCanvasWidthM={sharedCanvasWidthM}
               referenceFootprint={baseBoundingBox ? { ...baseBoundingBox, label: 'Unterbau' } : undefined}
             />
-            <PlacedPiecesChips pieces={topPieces} onRemovePiece={topEditorProps.onRemovePiece} />
+            {!sharedView && <PlacedPiecesChips pieces={topPieces} onRemovePiece={topEditorProps.onRemovePiece} />}
           </>
         )}
       </section>
@@ -558,8 +641,8 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
             {/* Ausgeblendete Ebenen fehlen hier, bleiben aber als Referenz-Umriss im Editor der anderen Ebene. */}
             <AufbauScene3D
               tiers={[
-                ...(baseView.hidden ? [] : [{ layout: baseLayout, feet: baseLabeledFeet, heightM: baseHeightCm / 100, panelColor: '#2c3e6b' }]),
-                ...(topView.hidden
+                ...(effBaseView.hidden ? [] : [{ layout: baseLayout, feet: baseLabeledFeet, heightM: baseHeightCm / 100, panelColor: '#2c3e6b' }]),
+                ...(effTopView.hidden
                   ? []
                   : [
                       {
@@ -574,7 +657,7 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
               ]}
               onCanvasReady={onCanvasReady}
             />
-            {baseView.hidden && topView.hidden && <p className="mt-2 text-sm text-[var(--color-text-muted)]">Alle Ebenen sind ausgeblendet.</p>}
+            {effBaseView.hidden && effTopView.hidden && <p className="mt-2 text-sm text-[var(--color-text-muted)]">Alle Ebenen sind ausgeblendet.</p>}
           </div>
 
           {resultTab === 'material' && <MaterialListTable items={materialList} />}
@@ -583,7 +666,7 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold text-[var(--color-text)]">Im Browser gespeichert</h2>
-        <SavedConfigsPanel namespace="tresen" currentData={currentSavedState} onLoad={applySavedState} />
+        <SavedConfigsPanel namespace="tresen" currentData={currentSavedState} onLoad={applyOwnState} />
       </section>
     </div>
   );
