@@ -42,7 +42,8 @@ export function buildPrintHtml(svg: string, paper: PaperFormat, orientation: Pap
     `@page { size: ${paper} ${pageOrientation}; margin: 0 } ` +
     'html,body{margin:0} ' +
     `svg{display:block;width:${w}mm;height:${h}mm} ` +
-    '.seite{page-break-after:always} ' +
+    // Umbruch nur vor einem Anhang, sonst druckt Chrome eine leere zweite Seite.
+    '.seite{overflow:hidden} .seite + *{break-before:page;page-break-before:always} ' +
     'table{border-collapse:collapse;font:10pt Arial,sans-serif} td,th{border:1px solid #bbb;padding:2px 6px}' +
     `</style></head><body><div class="seite">${svg}</div>${appendixHtml}</body></html>`
   );

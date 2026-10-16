@@ -100,7 +100,7 @@ export function ScaledPlanExport({ sections, title, filenamePrefix, organisation
             Drucken / als PDF speichern
           </button>
         </div>
-        <p className="text-xs text-[var(--color-text-muted, #666)]">
+        <p className="text-xs text-[var(--color-text-muted)]">
           Im Druckdialog Skalierung auf 100 % bzw. „Tatsächliche Größe“ stellen und Ränder auf „Keine“ setzen, damit der Maßstab stimmt.
         </p>
       </div>
