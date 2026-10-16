@@ -1,4 +1,6 @@
 import { findFreePosition, fitsAllAt, fitsAt, makePieceId, mirrorPieceInPlace, rotatePieceInPlace, type FilledPiece, type PlacementOptions, type Piece2D } from './customShape';
+import { isCatalogRect, isCatalogTriangleBox, QUARTER_CIRCLE_RADIUS_M } from './panels';
+import type { PieceShape, TriangleCorner } from './types';
 
 /**
  * Appends filled pieces (without IDs) to the pieces array, assigning fresh IDs.
@@ -244,4 +246,70 @@ export function piecesInRect(pieces: readonly Piece2D[], rect: { x: number; y: n
       return p.x < x1 - RECT_EPS && p.x + p.w > x0 + RECT_EPS && p.y < y1 - RECT_EPS && p.y + p.d > y0 + RECT_EPS;
     })
     .map((p) => p.id);
+}
+
+/** Gewünschte Form eines Stücks im Positions-Inspector: Rechteck, Dreieck (mit Katalogmaß) oder Viertelkreis. */
+export type PieceTypeChoice = { kind: 'rect'; w: number; d: number } | { kind: 'triangle'; w: number; d: number } | { kind: 'viertelkreis' };
+
+/** Änderungen aus dem Positions-Inspector; nicht gesetzte Felder bleiben unverändert. */
+export interface PieceEdit {
+  x?: number;
+  y?: number;
+  type?: PieceTypeChoice;
+}
+
+/**
+ * Prüft eine Bearbeitung eines einzelnen Stücks (Position und/oder Typ) und liefert die neue Stückliste.
+ * Gleiche Referenz, wenn sich nichts ändert. `blockers` sind feste Stücke (z. B. andere Ebene), gegen die geprüft wird; sie landen nie im Ergebnis.
+ */
+export function validatePieceEdit(
+  pieces: Piece2D[],
+  id: string,
+  edit: PieceEdit,
+  blockers: readonly Piece2D[] = [],
+): { ok: true; pieces: Piece2D[] } | { ok: false; reason: string } {
+  const p = pieces.find((q) => q.id === id);
+  if (!p) return { ok: false, reason: 'Stück nicht gefunden.' };
+  if (edit.x !== undefined && (!Number.isFinite(edit.x) || edit.x < 0)) return { ok: false, reason: 'Position darf nicht negativ sein.' };
+  if (edit.y !== undefined && (!Number.isFinite(edit.y) || edit.y < 0)) return { ok: false, reason: 'Position darf nicht negativ sein.' };
+
+  // Neue Form: Maße, Ecke und Form. Ohne Typwechsel bleibt alles wie es war.
+  let w = p.w;
+  let d = p.d;
+  let corner: TriangleCorner | undefined = p.corner;
+  let shape: PieceShape | undefined = p.shape;
+  const t = edit.type;
+  if (t) {
+    if (t.kind === 'rect') {
+      if (!isCatalogRect(t.w, t.d)) return { ok: false, reason: 'Diese Größe gibt es nicht im Katalog.' };
+      w = t.w;
+      d = t.d;
+      corner = undefined;
+      shape = undefined;
+    } else if (t.kind === 'triangle') {
+      if (!isCatalogTriangleBox(t.w, t.d)) return { ok: false, reason: 'Diese Größe gibt es nicht im Katalog.' };
+      w = t.w;
+      d = t.d;
+      // Ein Dreieck behält seine Ecke; aus Rechteck oder Viertelkreis wird die Ecke oben links.
+      corner = p.corner !== undefined && p.shape === undefined ? p.corner : 'tl';
+      shape = undefined;
+    } else {
+      w = QUARTER_CIRCLE_RADIUS_M;
+      d = QUARTER_CIRCLE_RADIUS_M;
+      corner = p.corner ?? 'tl';
+      shape = 'viertelkreis';
+    }
+  }
+
+  const x = edit.x !== undefined ? r3(edit.x) : p.x;
+  const y = edit.y !== undefined ? r3(edit.y) : p.y;
+  const next: Piece2D = { id: p.id, x, y, w, d };
+  if (corner !== undefined) next.corner = corner;
+  if (shape !== undefined) next.shape = shape;
+
+  const unchanged = x === p.x && y === p.y && w === p.w && d === p.d && corner === p.corner && shape === p.shape;
+  if (unchanged) return { ok: true, pieces };
+
+  if (!fitsAt([...pieces, ...blockers], x, y, w, d, id)) return { ok: false, reason: 'Dort liegt schon ein anderes Stück.' };
+  return { ok: true, pieces: pieces.map((q) => (q.id === id ? next : q)) };
 }

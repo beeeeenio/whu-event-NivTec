@@ -10,7 +10,7 @@ import {
   type PlacementOptions,
   type Piece2D,
 } from '../../domain/customShape';
-import { checkGroupMove, duplicateWithOffset, moveGroupTo, piecesInRect, rotateGroupAroundCenter, rotatePieceAroundCenter, snapGroupDelta, type GroupMoveCheck } from '../../domain/pieceOps';
+import { checkGroupMove, duplicateWithOffset, moveGroupTo, piecesInRect, rotateGroupAroundCenter, rotatePieceAroundCenter, snapGroupDelta, validatePieceEdit, type GroupMoveCheck } from '../../domain/pieceOps';
 import {
   getMemoryClipboard,
   makeClipboardPayload,
@@ -35,6 +35,7 @@ import { DragOverlay } from './editor/DragOverlay';
 import { EditorToolbar } from './editor/EditorToolbar';
 import { PiecePalette } from './editor/PiecePalette';
 import { PieceShape } from './editor/PieceShape';
+import { PieceInspector } from './editor/PieceInspector';
 import { SelectionActionBar, type SelectionAction } from './editor/SelectionActionBar';
 import { ShortcutHelp } from './editor/ShortcutHelp';
 import { ZoomControls } from './editor/ZoomControls';
@@ -1395,6 +1396,20 @@ export function PieceCanvasEditor({
           </>
         }
       />
+      {selectedPiece && onReplaceAll && (
+        <PieceInspector
+          key={selectedPiece.id}
+          piece={selectedPiece}
+          onApply={(edit) => {
+            const r = validatePieceEdit(pieces, selectedPiece.id, edit);
+            if (!r.ok) return r.reason;
+            // Ohne Änderung keine neue Rückgängig-Stufe.
+            if (r.pieces !== pieces) onReplaceAll(r.pieces);
+            return null;
+          }}
+          onRotate={rotateSelected}
+        />
+      )}
       {blockedMessage && (
         <div role="status" className="rounded-md border border-[var(--color-danger)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-danger)]">
           {blockedMessage}

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { addFilledPieces, checkGroupMove, duplicateWithOffset, moveGroupTo, movePieceTo, movePiecesBy, piecesInRect, removePieceById, removePiecesByIds, rotateGroupAroundCenter, rotatePieceAroundCenter, rotatePieceById, snapGroupDelta } from '../pieceOps';
+import { addFilledPieces, checkGroupMove, duplicateWithOffset, moveGroupTo, movePieceTo, movePiecesBy, piecesInRect, removePieceById, removePiecesByIds, rotateGroupAroundCenter, rotatePieceAroundCenter, rotatePieceById, snapGroupDelta, validatePieceEdit } from '../pieceOps';
 import { fitsAt, type Piece2D } from '../customShape';
 
 describe('pieceOps', () => {
@@ -484,5 +484,102 @@ describe('Kanten-Snapping und Drehen um den Mittelpunkt', () => {
     it('liefert ohne Auswahl einen Nullversatz', () => {
       expect(moveGroupTo([a, b], [], 2, 2)).toEqual({ dx: 0, dy: 0, result: 'ok' });
     });
+  });
+});
+
+describe('validatePieceEdit', () => {
+  const a: Piece2D = { id: 'a', x: 0, y: 0, w: 2, d: 1 };
+  const b: Piece2D = { id: 'b', x: 3, y: 0, w: 1, d: 1 };
+
+  it('setzt eine gültige x-Position', () => {
+    const r = validatePieceEdit([a, b], 'a', { x: 0.5 });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.pieces[0]).toEqual({ id: 'a', x: 0.5, y: 0, w: 2, d: 1 });
+      expect(r.pieces[1]).toBe(b);
+    }
+  });
+
+  it('setzt eine gültige y-Position', () => {
+    const r = validatePieceEdit([a, b], 'a', { y: 2 });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.pieces[0].y).toBe(2);
+  });
+
+  it('lehnt negative Positionen ab', () => {
+    expect(validatePieceEdit([a], 'a', { x: -1 })).toEqual({ ok: false, reason: 'Position darf nicht negativ sein.' });
+    expect(validatePieceEdit([a], 'a', { y: -0.5 })).toEqual({ ok: false, reason: 'Position darf nicht negativ sein.' });
+  });
+
+  it('lehnt nicht endliche Positionen ab', () => {
+    expect(validatePieceEdit([a], 'a', { x: Number.NaN }).ok).toBe(false);
+    expect(validatePieceEdit([a], 'a', { y: Number.POSITIVE_INFINITY }).ok).toBe(false);
+  });
+
+  it('lehnt eine Position mit Überlappung ab und ändert nichts', () => {
+    // a (2 m breit) bei x=2,5 läge über b (3..4).
+    expect(validatePieceEdit([a, b], 'a', { x: 2.5 })).toEqual({ ok: false, reason: 'Dort liegt schon ein anderes Stück.' });
+  });
+
+  it('meldet einen unbekannten Stück-ID', () => {
+    expect(validatePieceEdit([a], 'nope', { x: 1 })).toEqual({ ok: false, reason: 'Stück nicht gefunden.' });
+  });
+
+  it('wandelt ein Rechteck in ein Dreieck um (Ecke tl, ohne shape)', () => {
+    const sq: Piece2D = { id: 's', x: 0, y: 0, w: 1, d: 1 };
+    const r = validatePieceEdit([sq], 's', { type: { kind: 'triangle', w: 1, d: 1 } });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.pieces[0].corner).toBe('tl');
+      expect('shape' in r.pieces[0]).toBe(false);
+    }
+  });
+
+  it('wandelt ein Dreieck in ein Rechteck um (corner und shape fallen weg)', () => {
+    const tri: Piece2D = { id: 't', x: 0, y: 0, w: 1, d: 1, corner: 'br' };
+    const r = validatePieceEdit([tri], 't', { type: { kind: 'rect', w: 2, d: 1 } });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.pieces[0]).toEqual({ id: 't', x: 0, y: 0, w: 2, d: 1 });
+      expect('corner' in r.pieces[0]).toBe(false);
+      expect('shape' in r.pieces[0]).toBe(false);
+    }
+  });
+
+  it('behält die Ecke beim Wechsel Dreieck→Dreieck', () => {
+    const tri: Piece2D = { id: 't', x: 0, y: 0, w: 1, d: 1, corner: 'br' };
+    const r = validatePieceEdit([tri], 't', { type: { kind: 'triangle', w: 2, d: 1 } });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.pieces[0]).toMatchObject({ w: 2, d: 1, corner: 'br' });
+  });
+
+  it('wandelt ein Rechteck in einen Viertelkreis um (w=d=1, shape viertelkreis)', () => {
+    const r = validatePieceEdit([a], 'a', { type: { kind: 'viertelkreis' } });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.pieces[0]).toMatchObject({ w: 1, d: 1, corner: 'tl', shape: 'viertelkreis' });
+  });
+
+  it('lehnt Maße außerhalb des Katalogs ab', () => {
+    expect(validatePieceEdit([a], 'a', { type: { kind: 'rect', w: 1.2, d: 1 } })).toEqual({ ok: false, reason: 'Diese Größe gibt es nicht im Katalog.' });
+    expect(validatePieceEdit([a], 'a', { type: { kind: 'triangle', w: 1, d: 1.5 } })).toEqual({ ok: false, reason: 'Diese Größe gibt es nicht im Katalog.' });
+  });
+
+  it('gibt bei unveränderter Bearbeitung dieselbe Referenz zurück', () => {
+    const list = [a, b];
+    expect(validatePieceEdit(list, 'a', { x: 0, y: 0 })).toEqual({ ok: true, pieces: list });
+    const r = validatePieceEdit(list, 'a', { x: 0, y: 0, type: { kind: 'rect', w: 2, d: 1 } });
+    expect(r.ok && r.pieces).toBe(list);
+  });
+
+  it('beachtet Blocker bei der Kollisionsprüfung, ohne sie ins Ergebnis zu nehmen', () => {
+    const blocker: Piece2D = { id: 'blk', x: 3, y: 0, w: 1, d: 1 };
+    const r = validatePieceEdit([a], 'a', { x: 2.5 }, [blocker]);
+    expect(r).toEqual({ ok: false, reason: 'Dort liegt schon ein anderes Stück.' });
+    const ok = validatePieceEdit([a], 'a', { x: 1 }, [blocker]);
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      expect(ok.pieces).toHaveLength(1);
+      expect(ok.pieces.some((q) => q.id === 'blk')).toBe(false);
+    }
   });
 });
