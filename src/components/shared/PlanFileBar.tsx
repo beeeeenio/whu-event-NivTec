@@ -5,9 +5,11 @@ interface Props {
   namespace: string;
   currentData: unknown;
   onLoad: (data: unknown) => string | null;
+  /** Import-Bericht des letzten Ladens (z. B. verworfene Stücke) — optional. */
+  warnings?: string[];
 }
 
-export function PlanFileBar({ namespace, currentData, onLoad }: Props) {
+export function PlanFileBar({ namespace, currentData, onLoad, warnings }: Props) {
   const [importError, setImportError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -46,6 +48,9 @@ export function PlanFileBar({ namespace, currentData, onLoad }: Props) {
       <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleFileChange} className="hidden" />
       <span className="text-xs text-[var(--color-text-muted)]">JSON, z.B. für die Hallenplanung</span>
       {importError && <p className="text-xs text-[var(--color-danger)]">{importError}</p>}
+      {!importError && warnings && warnings.length > 0 && (
+        <p className="text-xs text-[var(--color-accent)]">Import-Hinweis: {warnings.join(' ')}</p>
+      )}
     </div>
   );
 }

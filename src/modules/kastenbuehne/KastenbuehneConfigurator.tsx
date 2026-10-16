@@ -27,6 +27,7 @@ import { loadForexPrints, saveForexPrints, type ForexPrints } from '../../lib/fo
 import { slicePrint } from '../../lib/printImage';
 import { STRUCTURE_RULES } from '../../domain/rules';
 import { parseKastenbuehneFile, type KastenbuehneSavedState } from '../../domain/savedState';
+import { PLAN_SCHEMA_VERSION } from '../../domain/migrations';
 import { formatMeters } from '../../lib/format';
 import { useDraftAutosave } from '../../hooks/useDraftAutosave';
 import { useExportCanvas } from '../../hooks/useExportCanvas';
@@ -141,11 +142,16 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
 
   const hasContent = pieces.length > 0;
 
+  // Import-Bericht: verworfene Stücke/Blenden und neu vergebene IDs aus dem letzten Laden
+  const [importWarnings, setImportWarnings] = useState<string[]>([]);
+
   function applySavedState(data: unknown): string | null {
     const result = parseKastenbuehneFile(data);
     if (!result.ok) {
+      setImportWarnings([]);
       return result.error;
     }
+    setImportWarnings(result.warnings);
     const v = result.value;
     // Import ist ein einziger Undo-Schritt: Höhe, Stücke und Blenden zusammen.
     doc.set((d) => ({ heightCm: v.heightCm ?? d.heightCm, pieces: v.pieces, forexPanels: v.forexPanels ?? [] }));
@@ -155,8 +161,8 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
   // forexPanels nur mitschreiben, wenn es welche gibt — Dateien ohne Blenden bleiben wie bisher.
   const currentSavedState: KastenbuehneSavedState =
     activeForexPanels.length > 0
-      ? { heightCm, pieces, forexPanels: activeForexPanels }
-      : { heightCm, pieces };
+      ? { schemaVersion: PLAN_SCHEMA_VERSION, kind: 'kastenbuehne', heightCm, pieces, forexPanels: activeForexPanels }
+      : { schemaVersion: PLAN_SCHEMA_VERSION, kind: 'kastenbuehne', heightCm, pieces };
 
   function handleToggleForex(pieceId: string, side: ForexSide) {
     setForexPanels((prev) => toggleForexPanel(prev, pieceId, side));
@@ -168,7 +174,12 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-semibold text-[var(--color-text)]">Kastenbühne</h2>
-          <PlanFileBar namespace="kastenbuehne" currentData={currentSavedState} onLoad={applySavedState} />
+          <PlanFileBar
+            namespace="kastenbuehne"
+            currentData={currentSavedState}
+            onLoad={applySavedState}
+            warnings={importWarnings}
+          />
         </div>
         {restored && (
           <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-accent)]">

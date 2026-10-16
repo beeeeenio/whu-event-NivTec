@@ -16,7 +16,8 @@ import { buildMaterialList, mergeMaterialLists } from '../../domain/materialList
 import { isBracingRequired, STRUCTURE_RULES } from '../../domain/rules';
 import { SPINDEL_HEIGHT_OPTIONS_CM } from '../../domain/tresen';
 import { CATALOG_DEPTHS_M } from '../../domain/panels';
-import { parseTresenFile } from '../../domain/savedState';
+import { parseTresenFile, type TresenSavedState } from '../../domain/savedState';
+import { PLAN_SCHEMA_VERSION } from '../../domain/migrations';
 import { formatMeters } from '../../lib/format';
 import { useDraftAutosave } from '../../hooks/useDraftAutosave';
 import { useExportCanvas } from '../../hooks/useExportCanvas';
@@ -153,11 +154,16 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
     doc.set((d) => setDocField(d, 'topPieces', newTop));
   }
 
+  // Import-Bericht: verworfene Stücke und neu vergebene IDs aus dem letzten Laden
+  const [importWarnings, setImportWarnings] = useState<string[]>([]);
+
   function applySavedState(data: unknown): string | null {
     const result = parseTresenFile(data);
     if (!result.ok) {
+      setImportWarnings([]);
       return result.error;
     }
+    setImportWarnings(result.warnings);
     const v = result.value;
     // Import ist ein einziger Undo-Schritt: beide Höhen und beide Ebenen zusammen.
     doc.set((d) => ({
@@ -169,7 +175,14 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
     return null;
   }
 
-  const currentSavedState = { baseHeightCm, spindelHeightCm, basePieces, topPieces };
+  const currentSavedState: TresenSavedState = {
+    schemaVersion: PLAN_SCHEMA_VERSION,
+    kind: 'tresen',
+    baseHeightCm,
+    spindelHeightCm,
+    basePieces,
+    topPieces,
+  };
   const { restored, discard } = useDraftAutosave('tresen', currentSavedState, applySavedState);
 
   // Beide Ebenen bilden vorne (y=0, siehe Vorderkanten-Beschriftung in PieceCanvasEditor) eine
@@ -182,7 +195,12 @@ export function TresenConfigurator({ ci }: { ci: CiId }) {
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-semibold text-[var(--color-text)]">Aufbau</h2>
-          <PlanFileBar namespace="tresen" currentData={currentSavedState} onLoad={applySavedState} />
+          <PlanFileBar
+            namespace="tresen"
+            currentData={currentSavedState}
+            onLoad={applySavedState}
+            warnings={importWarnings}
+          />
         </div>
         {restored && (
           <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-accent)]">
