@@ -24,8 +24,9 @@ import { isSondermassPiece, TRIANGLE_PANEL_SIZE_M } from '../../domain/panels';
 import { triangleHand } from '../../domain/triangle';
 import { mirrorPayload, payloadMatches, payloadSize, payloadToFilled, rotatePayload, type ToolPayload } from '../../domain/toolPayload';
 import { formatMeters } from '../../lib/format';
-import { dragThresholdPx, isPrimaryButton, shouldRotateOnWheel } from '../../lib/pointer';
+import { dragThresholdPx, isPrimaryButton, shouldRotateOnWheel, wheelIntent } from '../../lib/pointer';
 import { createFrameThrottle } from '../../lib/pointerDrag';
+import { panBy, viewBoxToString, zoomAt, zoomLevel, type ViewBox } from '../../lib/viewport';
 import { editorShortcut, isEditableTarget } from '../../lib/shortcuts';
 import { CanvasGrid } from './editor/CanvasGrid';
 import { DragOverlay } from './editor/DragOverlay';
@@ -33,6 +34,7 @@ import { EditorToolbar } from './editor/EditorToolbar';
 import { PiecePalette } from './editor/PiecePalette';
 import { PieceShape } from './editor/PieceShape';
 import { ShortcutHelp } from './editor/ShortcutHelp';
+import { ZoomControls } from './editor/ZoomControls';
 import type { DragState, PaletteDragState } from './editor/types';
 import { usePointerDrag } from '../../hooks/usePointerDrag';
 import { pruneSelection } from '../../lib/pieceLayerProps';
@@ -131,6 +133,12 @@ export function PieceCanvasEditor({
 }: Props) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const svgRef = useRef<SVGSVGElement>(null);
+  // Äußerer Container: Fokusprüfung für die Leertaste (Verschieben), siehe unten.
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Ansicht, die während eines Ziehens (Stück, Palette, Verschieben) eingefroren ist — null = frei.
+  const frozenBaseRef = useRef<ViewBox | null>(null);
+  // Palette-Ziehen für das Mausrad-Fenster bzw. den nativen Listener (synchron, ohne Render dazwischen).
+  const paletteDragRef = useRef<PaletteDragState | null>(null);
   // Letzte Mausposition über dem Plan — nur Ref, kein State: Ziel für Einfügen am Mauszeiger.
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   // Aktuelle Stückliste für asynchrone Pfade (Rückfall-Timer beim Einfügen).
@@ -158,6 +166,16 @@ export function PieceCanvasEditor({
   }
   const [drag, setDrag] = useState<DragState | null>(null);
   const [paletteDrag, setPaletteDrag] = useState<PaletteDragState | null>(null);
+  // Zoom/Ausschnitt des Plans in Metern; null = automatisch eingepasst (wie bisher).
+  const [view, setView] = useState<ViewBox | null>(null);
+  // Leertaste gehalten: Plan verschieben statt Stücke greifen.
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  // Eingefrorene Ansicht während eines Ziehens: State für den Render, Ref für die Listener (synchron, ohne Render dazwischen).
+  const [frozenBase, setFrozenBaseState] = useState<ViewBox | null>(null);
+  function setFrozenBase(v: ViewBox | null) {
+    frozenBaseRef.current = v;
+    setFrozenBaseState(v);
+  }
   const [blockedMessage, setBlockedMessage] = useState<string | null>(null);
   // Ein Button hat natives Klick-Verhalten, das nach einem echten Ziehen trotzdem feuert
   // (Pointer-Events und das nachfolgende `click` sind getrennte, aufeinanderfolgende Dinge,
@@ -177,7 +195,10 @@ export function PieceCanvasEditor({
       onTilePointerDown: (e: React.PointerEvent<HTMLButtonElement>, p: ToolPayload) => paletteHandlersRef.current.down(e, p),
       onTilePointerMove: (e: React.PointerEvent<HTMLButtonElement>) => paletteHandlersRef.current.move(e),
       onTilePointerUp: (e: React.PointerEvent<HTMLButtonElement>) => paletteHandlersRef.current.up(e),
-      onTileCancel: () => setPaletteDrag(null),
+      onTileCancel: () => {
+        setFrozenBase(null);
+        setPaletteDrag(null);
+      },
       onTileClick: (p: ToolPayload, isArmed: boolean) => {
         if (suppressNextClickRef.current) {
           suppressNextClickRef.current = false;
@@ -247,7 +268,13 @@ export function PieceCanvasEditor({
   );
   const canvasWidthM = Math.max(minCanvasWidthM ?? 0, MIN_CANVAS_WIDTH_M, contentWidthM + BUFFER_M);
   const canvasDepthM = Math.max(MIN_CANVAS_DEPTH_M, contentDepthM + BUFFER_M);
-  const viewBox = `${-PAD} ${-PAD} ${canvasWidthM + PAD * 2} ${canvasDepthM + PAD * 2}`;
+  // Ausgangsausschnitt (ganzer Plan mit Rand). Während eines Ziehens bleibt er eingefroren, damit die Ansicht nicht springt.
+  const baseView: ViewBox = { x: -PAD, y: -PAD, w: canvasWidthM + PAD * 2, h: canvasDepthM + PAD * 2 };
+  const effectiveBase = frozenBase ?? baseView;
+  const viewBox = viewBoxToString(view ?? effectiveBase);
+  const zoomPercent = Math.round(zoomLevel(view ?? effectiveBase, effectiveBase) * 100);
+  // Aktuelle Werte für den nativen Mausrad-Listener (wird einmal registriert).
+  const baseRef = useRef(baseView);
 
   /**
    * Wandelt einen Bildschirmpunkt exakt in viewBox-Koordinaten (Meter) um, über die
@@ -356,6 +383,7 @@ export function PieceCanvasEditor({
     if (!isPrimaryButton(e)) return;
     suppressNextClickRef.current = false;
     arm(null);
+    setFrozenBase(baseView);
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
@@ -377,6 +405,7 @@ export function PieceCanvasEditor({
   function handlePaletteButtonPointerUp(e: React.PointerEvent<HTMLButtonElement>) {
     const pd = paletteDrag;
     setPaletteDrag(null);
+    setFrozenBase(null);
     if (!pd?.moved) return; // kein echtes Ziehen: der nachfolgende native `click` armt wie bisher
     suppressNextClickRef.current = true;
     if (pd.overCanvas) commitPayloadAt(pd.payload, e.clientX, e.clientY, e.altKey);
@@ -402,6 +431,7 @@ export function PieceCanvasEditor({
       if (e.key === 'Escape') {
         e.preventDefault();
         suppressNextClickRef.current = true;
+        setFrozenBase(null);
         setPaletteDrag(null);
         setPointerPos(null);
         return;
@@ -416,6 +446,8 @@ export function PieceCanvasEditor({
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      // Reines Rad dreht das Stück; Strg/Cmd+Rad wird nur verworfen (kein Zoom während des Ziehens).
+      if (wheelIntent(e, { paletteDragging: true }) !== 'rotate') return;
       const now = performance.now();
       if (!shouldRotateOnWheel(e, now, lastWheelRotateRef.current)) return;
       lastWheelRotateRef.current = now;
@@ -458,6 +490,60 @@ export function PieceCanvasEditor({
     };
   }, [placing]);
 
+  // Leertaste gedrückt halten = Plan verschieben. Nur wenn der Plan den Fokus hat und kein Werkzeug bewaffnet ist
+  // (sonst platziert die Leertaste wie bisher). Die Taste wird am Fenster abgefangen, damit die Seite nicht scrollt
+  // und ein fokussierter Schalter nicht auslöst; Eingabefelder bleiben unberührt.
+  const spaceGrabRef = useRef(false);
+  useEffect(() => {
+    const onDown = (e: KeyboardEvent) => {
+      if (e.key !== ' ' || armed || isEditableTarget(e.target)) return;
+      if (!containerRef.current?.contains(document.activeElement)) return;
+      e.preventDefault();
+      spaceGrabRef.current = true;
+      setSpaceHeld(true);
+    };
+    // keyup nur, wenn wir das keydown abgefangen haben – sonst löst ein fokussierter Schalter normal aus.
+    const onUp = (e: KeyboardEvent) => {
+      if (e.key !== ' ' || !spaceGrabRef.current) return;
+      e.preventDefault();
+      spaceGrabRef.current = false;
+      setSpaceHeld(false);
+    };
+    const onBlur = () => {
+      spaceGrabRef.current = false;
+      setSpaceHeld(false);
+    };
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [armed]);
+
+  // Mausrad am Plan: Strg/Cmd+Rad (und Trackpad-Pinch) zoomt zum Mauszeiger, das reine Rad scrollt die Seite.
+  // Nativer Listener mit passive:false, damit preventDefault wirkt (React-onWheel ist passiv).
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const onWheel = (e: WheelEvent) => {
+      const intent = wheelIntent(e, { paletteDragging: paletteDragRef.current !== null });
+      if (intent === 'scroll') return;
+      e.preventDefault();
+      // Während eines Ziehens bleibt die Ansicht stehen (Stück, Palette oder Verschieben).
+      if (intent !== 'zoom' || frozenBaseRef.current !== null) return;
+      // Zeilen- bzw. Seitenmaß (Firefox) auf Pixel umrechnen, damit die Zoomstufen gleich groß bleiben.
+      const deltaPx = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+      const factor = Math.exp(-deltaPx * 0.002);
+      const focus = svgPointFromClient(e.clientX, e.clientY);
+      setView((v) => zoomAt(v ?? baseRef.current, baseRef.current, factor, focus));
+    };
+    svg.addEventListener('wheel', onWheel, { passive: false });
+    return () => svg.removeEventListener('wheel', onWheel);
+  }, []);
+
   // Ziehen platzierter Stücke läuft über den Hook (Schwelle je Zeigertyp, Pointer-Capture, Esc, pointercancel).
   // dragRef spiegelt den DragState synchron: Zieh-Updates rechnen gegen den letzten Wert statt gegen den
   // React-State, und gerendert wird höchstens einmal je Frame über dragThrottle.
@@ -472,6 +558,7 @@ export function PieceCanvasEditor({
     dragThrottle.cancel();
     dragRef.current = null;
     setDrag(null);
+    setFrozenBase(null);
   }
 
   // Mehrere Callback-Aufrufe als ein Undo-Schritt (fällt ohne onTransact auf direkten Aufruf zurück).
@@ -500,6 +587,7 @@ export function PieceCanvasEditor({
       };
       dragRef.current = next;
       setDrag(next);
+      setFrozenBase(baseView);
       return true;
     },
     onMove: (e, _session, piece) => {
@@ -539,6 +627,7 @@ export function PieceCanvasEditor({
       dragThrottle.cancel();
       setDrag(null);
       dragRef.current = null;
+      setFrozenBase(null);
       if (!cur) return;
       if (cur.group) {
         const { dx, dy, valid } = cur.group;
@@ -559,6 +648,37 @@ export function PieceCanvasEditor({
     },
     onCancel: cancelPieceDrag,
   });
+
+  // Verschieben des Ausschnitts: Leertaste+Ziehen oder mittlere Maustaste. Läuft als eigene Zieh-Sitzung am svg
+  // (siehe onPointerDownCapture); die Ansicht friert dabei ein wie beim Stück-Ziehen.
+  const panDrag = usePointerDrag<null>(
+    {
+      onStart: () => {
+        setFrozenBase(baseView);
+      },
+      onMove: (e, s) => {
+        // s.prevX/prevY ist der Punkt vor diesem Ereignis: um die Differenz verschieben, dann bleibt der Plan unter dem Zeiger.
+        const k = metersPerPxOf(svgRef.current);
+        setView((v) => panBy(v ?? effectiveBase, -(e.clientX - s.prevX) * k, -(e.clientY - s.prevY) * k));
+      },
+      onEnd: () => {
+        setFrozenBase(null);
+      },
+      onCancel: () => {
+        setFrozenBase(null);
+      },
+    },
+    { allowButtons: [0, 1] },
+  );
+  const panHandlers = panDrag.bind(null);
+
+  // Zoomschalter: um die Mitte der aktuellen Ansicht zoomen.
+  function zoomByButton(factor: number) {
+    setView((v) => {
+      const cur = v ?? effectiveBase;
+      return zoomAt(cur, effectiveBase, factor, { x: cur.x + cur.w / 2, y: cur.y + cur.h / 2 });
+    });
+  }
 
   const selectedPiece = selectedId ? pieces.find((p) => p.id === selectedId) ?? null : null;
 
@@ -692,6 +812,12 @@ export function PieceCanvasEditor({
       return;
     }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    // 0 passt den Plan wieder ins Bild – nicht während eines Ziehens, dort bleibt die Ansicht stehen.
+    if (e.key === '0') {
+      e.preventDefault();
+      if (frozenBaseRef.current === null) setView(null);
+      return;
+    }
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length > 0) {
       e.preventDefault();
       if (!e.repeat) removeSelected();
@@ -840,9 +966,11 @@ export function PieceCanvasEditor({
   // Stückliste für den Rückfall-Timer beim Einfügen aktuell halten (siehe piecesRef).
   useLayoutEffect(() => {
     piecesRef.current = pieces;
+    baseRef.current = effectiveBase;
+    paletteDragRef.current = paletteDrag;
   });
   return (
-    <div className="space-y-3" onKeyDown={handleEditorKeyDown} onPaste={handleEditorPaste}>
+    <div ref={containerRef} className="space-y-3" onKeyDown={handleEditorKeyDown} onPaste={handleEditorPaste}>
       <EditorToolbar
         statusText={statusText()}
         onUndo={onUndo}
@@ -864,6 +992,14 @@ export function PieceCanvasEditor({
         onShiftAll={shiftAll}
         shiftStepM={GRID_STEP_M}
         onClear={onClear ? handleClear : undefined}
+        extra={
+          <ZoomControls
+            zoomPercent={zoomPercent}
+            onZoomIn={() => zoomByButton(1.25)}
+            onZoomOut={() => zoomByButton(1 / 1.25)}
+            onFit={() => setView(null)}
+          />
+        }
       />
       {blockedMessage && (
         <div role="status" className="rounded-md border border-[var(--color-danger)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-danger)]">
@@ -893,14 +1029,27 @@ export function PieceCanvasEditor({
         ref={svgRef}
         viewBox={viewBox}
         className="block w-full h-auto max-h-[420px] rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] select-none"
-        style={{ touchAction: 'none' }}
+        style={{ touchAction: 'none', cursor: panDrag.active ? 'grabbing' : spaceHeld ? 'grab' : undefined }}
         role="img"
         aria-label="Bau-Editor — klicken und dann Tastatur nutzen (Pfeiltasten, Enter, R, Entf, Esc, 1–4, T; Kurzbefehle siehe unten)"
         tabIndex={0}
         onKeyDown={handleCanvasKeyDown}
+        onPointerDownCapture={(e) => {
+          // Mittlere Taste oder Leertaste+links verschiebt den Plan. Die Capture-Phase fängt das vor den Stücken ab.
+          const panStart = e.button === 1 || (spaceHeld && e.button === 0);
+          if (!panStart) return;
+          // Mittelklick würde unter Windows das Auto-Scrollen starten.
+          if (e.button === 1) e.preventDefault();
+          e.stopPropagation();
+          panHandlers.onPointerDown(e);
+        }}
         onPointerMove={(e) => {
           lastPointerRef.current = svgPointFromClient(e.clientX, e.clientY);
+          panHandlers.onPointerMove(e);
         }}
+        onPointerUp={panHandlers.onPointerUp}
+        onPointerCancel={panHandlers.onPointerCancel}
+        onLostPointerCapture={panHandlers.onLostPointerCapture}
         onPointerLeave={() => {
           lastPointerRef.current = null;
         }}
@@ -982,7 +1131,7 @@ export function PieceCanvasEditor({
           // Bei p.corner !== undefined (Dreieck) NIE isSondermassPiece(p.w,p.d) aufrufen — (1,1)
           // ist auch die Bounding-Box des echten 1×1-Rechtecks, das würde fälschlich matchen.
           const sondermass = p.corner === undefined && isSondermassPiece(p.w, p.d);
-          const interactive = !armed && !paletteDrag;
+          const interactive = !armed && !paletteDrag && !spaceHeld;
           return (
             <PieceShape
               key={p.id}

@@ -33,6 +33,26 @@ describe('advanceSession', () => {
   });
 });
 
+describe('advanceSession prevX/prevY', () => {
+  it('startet ohne Vorgänger: prev = Start', () => {
+    const s = startSession({ pointerId: 1, pointerType: 'mouse', clientX: 10, clientY: 20 });
+    expect(s.prevX).toBe(10);
+    expect(s.prevY).toBe(20);
+  });
+
+  it('merkt sich den Punkt vor dem letzten Ereignis, so entsteht die Differenz je Schritt', () => {
+    const s0 = startSession({ pointerId: 1, pointerType: 'mouse', clientX: 10, clientY: 20 });
+    const s1 = advanceSession(s0, { clientX: 14, clientY: 18 });
+    expect(s1.prevX).toBe(10);
+    expect(s1.prevY).toBe(20);
+    const s2 = advanceSession(s1, { clientX: 20, clientY: 30 });
+    expect(s2.prevX).toBe(14);
+    expect(s2.prevY).toBe(18);
+    expect(s2.lastX).toBe(20);
+    expect(s2.lastY).toBe(30);
+  });
+});
+
 describe('createFrameThrottle', () => {
   function fakeFrames() {
     const callbacks: Array<() => void> = [];

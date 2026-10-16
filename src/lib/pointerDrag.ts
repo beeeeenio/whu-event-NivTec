@@ -8,6 +8,9 @@ export interface DragSession {
   startY: number;
   lastX: number;
   lastY: number;
+  /** Position vor dem letzten Ereignis (für Verschieben um die Differenz zum vorherigen Punkt). */
+  prevX: number;
+  prevY: number;
   /** true, sobald die Schwelle des Zeigertyps einmal überschritten wurde; danach bleibt es true. */
   moved: boolean;
 }
@@ -20,14 +23,16 @@ export function startSession(e: { pointerId: number; pointerType: string; client
     startY: e.clientY,
     lastX: e.clientX,
     lastY: e.clientY,
+    prevX: e.clientX,
+    prevY: e.clientY,
     moved: false,
   };
 }
 
-/** Aktualisiert die Sitzung (lastX/lastY = letzter Punkt); moved wird true, sobald die Schwelle (dragThresholdPx je Zeigertyp) einmal überschritten ist, und bleibt true. */
+/** Aktualisiert die Sitzung (lastX/lastY = letzter Punkt, prevX/prevY = Punkt davor); moved wird true, sobald die Schwelle (dragThresholdPx je Zeigertyp) einmal überschritten ist, und bleibt true. */
 export function advanceSession(s: DragSession, e: { clientX: number; clientY: number }): DragSession {
   const movedNow = Math.hypot(e.clientX - s.startX, e.clientY - s.startY) >= dragThresholdPx(s.pointerType);
-  return { ...s, lastX: e.clientX, lastY: e.clientY, moved: s.moved || movedNow };
+  return { ...s, prevX: s.lastX, prevY: s.lastY, lastX: e.clientX, lastY: e.clientY, moved: s.moved || movedNow };
 }
 
 /** Fasst häufige Updates auf höchstens eines je Frame zusammen; der letzte Wert gewinnt. */

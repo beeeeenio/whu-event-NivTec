@@ -38,6 +38,15 @@ export function ShortcutHelp() {
           <kbd className="rounded border border-[var(--color-border)] px-1">T</kbd> Dreieckpodest
         </li>
         <li>
+          <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+Mausrad</kbd> zoomen – zum Mauszeiger (auch Trackpad-Pinch)
+        </li>
+        <li>
+          <kbd className="rounded border border-[var(--color-border)] px-1">Leertaste</kbd>+Ziehen bzw. mittlere Maustaste: Plan verschieben
+        </li>
+        <li>
+          <kbd className="rounded border border-[var(--color-border)] px-1">0</kbd> ganzen Plan zeigen
+        </li>
+        <li>
           <kbd className="rounded border border-[var(--color-border)] px-1">Strg/Cmd+Z</kbd> Rückgängig
         </li>
         <li>
