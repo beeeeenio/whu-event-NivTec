@@ -1,8 +1,11 @@
 import { useState } from 'react';
+import type { MaterialListItem } from '../../domain/types';
+import { materialListRows } from '../../lib/csv';
 import { downloadTextFile } from '../../lib/download';
 import { printSvgDocument } from '../../lib/printSvg';
 import {
   buildScaledPlanSvg,
+  escapeXml,
   planFitsOnPaper,
   type PaperFormat,
   type PaperOrientation,
@@ -16,6 +19,8 @@ interface Props {
   title: string;
   filenamePrefix: string;
   organisation?: string;
+  /** Materialliste, die beim Drucken als zweite Seite angehängt werden kann. */
+  materialList?: MaterialListItem[];
 }
 
 const SELECT_CLASS =
@@ -23,13 +28,24 @@ const SELECT_CLASS =
 const BUTTON_CLASS =
   'px-3 py-1.5 rounded-md text-sm border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] hover:border-[var(--color-accent)] disabled:opacity-50 disabled:cursor-not-allowed';
 
+/** Materialliste als eigene Druckseite (Tabelle mit Art.-Nr.-Spalte); Zellen sind XML-escaped. */
+function materialAppendixHtml(items: MaterialListItem[]): string {
+  const [header, ...body] = materialListRows(items);
+  const cell = (tag: 'th' | 'td') => (v: string) => `<${tag}>${escapeXml(v)}</${tag}>`;
+  const head = `<tr>${header.map(cell('th')).join('')}</tr>`;
+  const rows = body.map((r) => `<tr>${r.map(cell('td')).join('')}</tr>`).join('');
+  return `<div class="seite"><h2>Materialliste</h2><table><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+}
+
 /** Maßstäblicher Plan als SVG-Download oder Druck/PDF über die Druckansicht; die Einstellungen liegen im aufklappbaren Panel. */
-export function ScaledPlanExport({ sections, title, filenamePrefix, organisation }: Props) {
+export function ScaledPlanExport({ sections, title, filenamePrefix, organisation, materialList }: Props) {
   const [scale, setScale] = useState<PlanScale>(50);
   const [paper, setPaper] = useState<PaperFormat>('A4');
   const [orientation, setOrientation] = useState<PaperOrientation>('quer');
   // Startwert übernimmt die Maßketten-Einstellung des Editors, damit beide Schalter zusammenpassen.
   const [dims, setDims] = useState(() => sections.some((s) => s.showDimensions));
+  const [appendix, setAppendix] = useState(true);
+  const hasMaterial = (materialList?.length ?? 0) > 0;
 
   const options = (): ScaledPlanOptions => ({
     title,
@@ -49,7 +65,8 @@ export function ScaledPlanExport({ sections, title, filenamePrefix, organisation
   }
 
   function handlePrint() {
-    printSvgDocument(buildScaledPlanSvg(options()), paper, orientation);
+    const appendixHtml = appendix && materialList?.length ? materialAppendixHtml(materialList) : '';
+    printSvgDocument(buildScaledPlanSvg(options()), paper, orientation, appendixHtml);
   }
 
   return (
@@ -84,6 +101,12 @@ export function ScaledPlanExport({ sections, title, filenamePrefix, organisation
             <input type="checkbox" checked={dims} onChange={(e) => setDims(e.target.checked)} />
             Maßketten
           </label>
+          {hasMaterial && (
+            <label className="flex items-center gap-1.5">
+              <input type="checkbox" checked={appendix} onChange={(e) => setAppendix(e.target.checked)} />
+              Materialliste anhängen
+            </label>
+          )}
         </div>
 
         {!fits && (

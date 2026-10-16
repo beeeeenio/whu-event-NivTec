@@ -107,4 +107,13 @@ describe('buildMaterialList', () => {
       expect(item.artikel).not.toMatch(/NaN/i);
     });
   });
+
+  it('vergibt die Katalog-Artikelnummern für 2×1 (111 01 0) und 1×1 (111 05 0) Rechtecke', () => {
+    const items = buildMaterialList({
+      ...input,
+      layout: buildLayoutFromPieces([piece('a', 0, 0, 2, 1), piece('b', 0, 1, 1, 1)]),
+    });
+    expect(items.find((i) => i.artikel === 'Systempodest 2×1 m')?.artikelNr).toBe('111 01 0');
+    expect(items.find((i) => i.artikel === 'Systempodest 1×1 m')?.artikelNr).toBe('111 05 0');
+  });
 });

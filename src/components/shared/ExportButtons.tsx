@@ -49,12 +49,18 @@ export function ExportButtons({ materialList, getCanvas, filenamePrefix, pptx }:
     if (!pptx) return;
     if (pptx.sections.length === 1) {
       const s = pptx.sections[0];
-      await exportLayoutAsPptx(s.layout, s.feet, s.heightCm, `${filenamePrefix}-grundriss.pptx`, pptx.ci, pptx.title, {
-        showDimensions: s.showDimensions,
-        annotations: s.annotations,
-      });
+      await exportLayoutAsPptx(
+        s.layout,
+        s.feet,
+        s.heightCm,
+        `${filenamePrefix}-grundriss.pptx`,
+        pptx.ci,
+        pptx.title,
+        { showDimensions: s.showDimensions, annotations: s.annotations },
+        materialList,
+      );
     } else {
-      await exportSectionsAsPptx(pptx.sections, `${filenamePrefix}-grundriss.pptx`, pptx.ci, pptx.title);
+      await exportSectionsAsPptx(pptx.sections, `${filenamePrefix}-grundriss.pptx`, pptx.ci, pptx.title, materialList);
     }
   }
 
@@ -85,7 +91,14 @@ export function ExportButtons({ materialList, getCanvas, filenamePrefix, pptx }:
           </button>
         )}
       </div>
-      {pptx && <ScaledPlanExport sections={pptx.sections} title={pptx.title} filenamePrefix={filenamePrefix} />}
+      {pptx && (
+        <ScaledPlanExport
+          sections={pptx.sections}
+          title={pptx.title}
+          filenamePrefix={filenamePrefix}
+          materialList={materialList}
+        />
+      )}
       {exportError && <p className="text-xs text-[var(--color-danger)]">{exportError}</p>}
     </div>
   );

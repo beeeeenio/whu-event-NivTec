@@ -4,8 +4,9 @@ import { boundingBoxOf } from '../domain/customShape';
 import { dimensionChains, type DimSegment } from '../domain/dimensions';
 import type { LabeledFootPosition } from '../domain/feet';
 import { footColorForHeight } from '../domain/footColorScale';
-import type { LayoutResult, TriangleCorner } from '../domain/types';
+import type { LayoutResult, MaterialListItem, TriangleCorner } from '../domain/types';
 import { CI_PPTX_LOGOS, type CiId } from './ci';
+import { materialListRows } from './csv';
 import { formatMeters } from './format';
 
 /**
@@ -317,10 +318,36 @@ function addCiLogo(slide: PptxGenJS.Slide, ci: CiId): void {
 }
 
 /**
+ * Folie mit der Materialliste als bearbeitbare PowerPoint-Tabelle (inkl. Art.-Nr.-Spalte); lange
+ * Listen laufen über weitere Folien (autoPage). Fehlende Artikelnummern stehen als '–'.
+ */
+function addMaterialSlide(pptx: PptxGenJS, items: MaterialListItem[], title: string): void {
+  const slide = pptx.addSlide();
+  const availableW = SLIDE_WIDTH_IN - MARGIN_IN * 2;
+  addMainTitle(slide, title, availableW);
+
+  const [header, ...body] = materialListRows(items);
+  const rows = [
+    header.map((text) => ({ text, options: { bold: true } })),
+    ...body.map((r) => r.map((text) => ({ text }))),
+  ];
+  slide.addTable(rows, {
+    x: MARGIN_IN,
+    y: MARGIN_IN + TITLE_H_IN,
+    w: availableW,
+    fontSize: 9,
+    fontFace: 'Arial',
+    border: { type: 'solid', color: 'BBBBBB', pt: 0.5 },
+    autoPage: true,
+  });
+}
+
+/**
  * Exportiert einen einzelnen Grundriss als editierbare PowerPoint-Folie: jede Platte
  * ist ein eigenes Rechteck-Shape, jeder Fuß ein eigenes Kreis-Shape (Farbe nach
  * Fußhöhe, siehe footColorScale) — beides in PowerPoint frei verschiebbar/anpassbar.
  * `extras` schaltet Maßketten zu und legt Notizen, Symbole und Messlinien auf die Folie.
+ * Ist `materialList` nicht leer, folgt eine zweite Folie „Materialliste“.
  */
 export async function exportLayoutAsPptx(
   layout: LayoutResult,
@@ -330,6 +357,7 @@ export async function exportLayoutAsPptx(
   ci: CiId,
   title = 'Grundrissplan',
   extras?: { showDimensions?: boolean; annotations?: PlanAnnotation[] },
+  materialList?: MaterialListItem[],
 ): Promise<void> {
   const pptx = new PptxGenJS();
   const slide = newSlide(pptx);
@@ -344,6 +372,7 @@ export async function exportLayoutAsPptx(
     { x: MARGIN_IN, y: MARGIN_IN + TITLE_H_IN, w: availableW, h: availableH },
   );
 
+  if (materialList && materialList.length > 0) addMaterialSlide(pptx, materialList, 'Materialliste');
   await pptx.writeFile({ fileName: filename });
 }
 
@@ -357,6 +386,7 @@ export async function exportSectionsAsPptx(
   filename: string,
   ci: CiId,
   title: string,
+  materialList?: MaterialListItem[],
 ): Promise<void> {
   const pptx = new PptxGenJS();
   const slide = newSlide(pptx);
@@ -374,5 +404,6 @@ export async function exportSectionsAsPptx(
     drawSection(slide, section, { x, y: MARGIN_IN + TITLE_H_IN, w: sectionW, h: availableH });
   });
 
+  if (materialList && materialList.length > 0) addMaterialSlide(pptx, materialList, 'Materialliste');
   await pptx.writeFile({ fileName: filename });
 }
