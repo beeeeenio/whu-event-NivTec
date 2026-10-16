@@ -168,7 +168,11 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
   function handleToggleForex(pieceId: string, side: ForexSide) {
     setForexPanels((prev) => toggleForexPanel(prev, pieceId, side));
   }
-  const { restored, discard } = useDraftAutosave('kastenbuehne', currentSavedState, applySavedState);
+  const { restored, discard, saveError, otherTabChanged, reloadFromOtherTab, dismissOtherTab } = useDraftAutosave(
+    'kastenbuehne',
+    currentSavedState,
+    applySavedState,
+  );
 
   return (
     <div className="space-y-6">
@@ -198,6 +202,20 @@ export function KastenbuehneConfigurator({ ci }: { ci: CiId }) {
             >
               Verwerfen
             </button>
+          </div>
+        )}
+        {saveError && <WarningBanner>{saveError}</WarningBanner>}
+        {otherTabChanged && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--color-warning)] px-3 py-2 text-sm text-[var(--color-warning)]">
+            <span>Dieser Plan wurde in einem anderen Tab geändert.</span>
+            <div className="flex shrink-0 gap-3 text-xs">
+              <button type="button" onClick={reloadFromOtherTab} className="underline">
+                Stand aus dem anderen Tab laden
+              </button>
+              <button type="button" onClick={dismissOtherTab} className="underline">
+                Hier weiterarbeiten
+              </button>
+            </div>
           </div>
         )}
         <p className="text-sm text-[var(--color-text-muted)]">
