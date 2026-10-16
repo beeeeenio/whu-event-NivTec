@@ -217,6 +217,8 @@ interface DragState {
   startClientY: number;
   moved: boolean;
   target: { x: number; y: number } | null;
+  /** Greifpunkt minus Stück-Ursprung (Meter), damit das Stück nicht mit der Mitte an den Cursor springt. */
+  grabOffset: { x: number; y: number };
   /** Nur bei gemeinsamem Verschieben mehrerer ausgewählter Stücke: Startpunkt (Meter) und Versatz. */
   group?: { startX: number; startY: number; dx: number; dy: number; valid: boolean };
 }
@@ -465,6 +467,7 @@ export function PieceCanvasEditor({
     return () => window.removeEventListener('keydown', onKey);
   }, [pieceDragging]);
 
+  // Der Greif-Offset bleibt erhalten: das Stück springt nicht mit der Mitte an den Cursor.
   function handlePiecePointerDown(e: React.PointerEvent<SVGElement>, piece: Piece2D) {
     if (!isPrimaryButton(e)) return;
     if (armed) return;
@@ -488,7 +491,8 @@ export function PieceCanvasEditor({
       startClientY: e.clientY,
       moved: false,
       target: null,
-      group: inGroup ? { startX: start.x, startY: start.y, dx: 0, dy: 0, valid: true } : undefined,
+      grabOffset: { x: start.x - piece.x, y: start.y - piece.y },
+      group: inGroup ?{ startX: start.x, startY: start.y, dx: 0, dy: 0, valid: true } : undefined,
     });
   }
 
@@ -505,10 +509,12 @@ export function PieceCanvasEditor({
       const dx = Math.max(-minX, snap(x - drag.group.startX));
       const dy = Math.max(-minY, snap(y - drag.group.startY));
       const valid = checkGroupMove(pieces, selectedIds, dx, dy) === 'ok';
+      if (drag.moved && drag.group.dx === dx && drag.group.dy === dy && drag.group.valid === valid) return;
       setDrag((d) => (d && d.group ? { ...d, moved: true, group: { ...d.group, dx, dy, valid } } : d));
       return;
     }
-    const target = findFreePosition(pieces, piece.w, piece.d, x - piece.w / 2, y - piece.d / 2, piece.id);
+    const target = findFreePosition(pieces, piece.w, piece.d, x - drag.grabOffset.x, y - drag.grabOffset.y, piece.id);
+    if (drag.moved && drag.target && drag.target.x === target.x && drag.target.y === target.y) return;
     setDrag((d) => (d ? { ...d, moved: true, target } : d));
   }
 
@@ -524,7 +530,7 @@ export function PieceCanvasEditor({
     } else if (drag?.id === piece.id) {
       if (drag.moved && drag.target) {
         onMovePiece(piece.id, drag.target.x, drag.target.y);
-        setSelectedId(null);
+        setSelectedId(piece.id);
       } else {
         setSelectedId((cur) => (cur === piece.id ? null : piece.id));
       }
