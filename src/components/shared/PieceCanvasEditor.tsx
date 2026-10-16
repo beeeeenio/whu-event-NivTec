@@ -53,6 +53,13 @@ const MIN_CANVAS_WIDTH_M = 6;
 const MIN_CANVAS_DEPTH_M = 4;
 const BUFFER_M = 2;
 const GRID_STEP_M = 0.5;
+const NUDGE_LARGE_M = 1;
+const ARROW_DELTA: Partial<Record<string, [number, number]>> = {
+  ArrowUp: [0, -1],
+  ArrowDown: [0, 1],
+  ArrowLeft: [-1, 0],
+  ArrowRight: [1, 0],
+};
 
 function round1(v: number): number {
   return Math.round(v * 10) / 10;
@@ -614,17 +621,31 @@ export function PieceCanvasEditor({
     onShiftAll(dx);
   }
 
-  const ARROW_DELTA: Partial<Record<string, [number, number]>> = {
-    ArrowUp: [0, -GRID_STEP_M],
-    ArrowDown: [0, GRID_STEP_M],
-    ArrowLeft: [-GRID_STEP_M, 0],
-    ArrowRight: [GRID_STEP_M, 0],
-  };
+  // Pfeil-Nudge für die ganze Auswahl (ein oder mehrere Stücke): ein Undo-Schritt pro Tastendruck,
+  // bei Blockade (Rand oder Kollision) Meldung statt stiller Abbruch — und kein Undo-Eintrag.
+  function nudgeSelection(ux: number, uy: number, step: number) {
+    const dx = round1(ux * step);
+    const dy = round1(uy * step);
+    const result = checkGroupMove(pieces, selectedIds, dx, dy);
+    if (result === 'out-of-bounds') {
+      showBlockedMessage('Weiter geht es nicht – der Plan beginnt hier.');
+      return;
+    }
+    if (result === 'collision') {
+      showBlockedMessage('Dort ist kein Platz – ein anderes Stück liegt im Weg.');
+      return;
+    }
+    if (onMovePieces) {
+      onMovePieces(selectedIds, dx, dy);
+      return;
+    }
+    pieces.filter((p) => selectedIds.includes(p.id)).forEach((p) => onMovePiece(p.id, round1(p.x + dx), round1(p.y + dy)));
+  }
 
   // Tastatur-Bedienung des Plans, nur aktiv wenn das SVG fokussiert ist (Klick oder Tab hinein) —
   // dadurch keine Kollision mit Eingabefeldern anderswo auf der Seite (z.B. Konfigurationsname).
-  // Pfeiltasten bewegen wahlweise ein ausgewähltes Stück (Nudge, blockiert bei Kollision statt
-  // zu verschieben) oder — bei bewaffnetem Werkzeug — einen Tastatur-Cursor (dieselbe pointerPos,
+  // Pfeiltasten bewegen die Auswahl (Umschalt = 1 m, blockiert mit Meldung) oder — bei bewaffnetem
+  // Werkzeug — einen Tastatur-Cursor (dieselbe pointerPos,
   // die auch die Maus-Vorschau treibt), Enter/Leertaste platziert dort. R dreht, Entf/Rücktaste
   // entfernt, Esc bricht ab. 1–4 wählen die Plattengrößen in derselben Reihenfolge wie die
   // Segmented-Control, T bewaffnet das Dreieckpodest.
@@ -665,27 +686,22 @@ export function PieceCanvasEditor({
       }
       return;
     }
-    // Umschalt+←/→ verschiebt immer die ganze Fläche, auch wenn gerade ein Stück ausgewählt ist —
-    // ohne Umschalt bleibt es beim bisherigen Nudge des Einzelstücks bzw. Tastatur-Cursors.
-    if (e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    // Umschalt+←/→ ohne Auswahl und ohne Werkzeug verschiebt die ganze Fläche.
+    if (e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight') && selectedIds.length === 0 && !armed) {
       e.preventDefault();
       shiftAll(e.key === 'ArrowLeft' ? -GRID_STEP_M : GRID_STEP_M);
       return;
     }
-    const delta = ARROW_DELTA[e.key];
-    if (delta) {
+    const unit = ARROW_DELTA[e.key];
+    if (unit) {
       e.preventDefault();
-      const [dx, dy] = delta;
-      if (selectedPiece) {
-        const nx = Math.max(0, round1(selectedPiece.x + dx));
-        const ny = Math.max(0, round1(selectedPiece.y + dy));
-        if (fitsAt(pieces, nx, ny, selectedPiece.w, selectedPiece.d, selectedPiece.id)) {
-          onMovePiece(selectedPiece.id, nx, ny);
-        }
+      const step = e.shiftKey ? NUDGE_LARGE_M : GRID_STEP_M;
+      if (selectedIds.length > 0) {
+        nudgeSelection(unit[0], unit[1], step);
       } else if (armed) {
         setPointerPos((cur) => {
           const base = cur ?? { x: 0, y: 0 };
-          return { x: Math.max(0, round1(base.x + dx)), y: Math.max(0, round1(base.y + dy)) };
+          return { x: Math.max(0, round1(base.x + unit[0] * step)), y: Math.max(0, round1(base.y + unit[1] * step)) };
         });
       }
       return;
@@ -780,7 +796,7 @@ export function PieceCanvasEditor({
                 type="button"
                 onClick={() => shiftAll(-GRID_STEP_M)}
                 disabled={!canShiftLeft}
-                title={canShiftLeft ? 'Alle Stücke gemeinsam 0,5 m nach links (Umschalt+←)' : 'Die Fläche liegt schon am linken Rand'}
+                title={canShiftLeft ? 'Alle Stücke gemeinsam 0,5 m nach links (Umschalt+← ohne Auswahl)' :'Die Fläche liegt schon am linken Rand'}
                 aria-label="Alle Stücke 0,5 m nach links verschieben"
                 className={ACTION_BTN}
               >
@@ -789,7 +805,7 @@ export function PieceCanvasEditor({
               <button
                 type="button"
                 onClick={() => shiftAll(GRID_STEP_M)}
-                title="Alle Stücke gemeinsam 0,5 m nach rechts (Umschalt+→)"
+                title="Alle Stücke gemeinsam 0,5 m nach rechts (Umschalt+→ ohne Auswahl)"
                 aria-label="Alle Stücke 0,5 m nach rechts verschieben"
                 className={ACTION_BTN}
               >
@@ -1082,11 +1098,11 @@ export function PieceCanvasEditor({
             Tastatur
           </li>
           <li>
-            <kbd className="rounded border border-[var(--color-border)] px-1">↑↓←→</kbd> Cursor/Stück bewegen
+            <kbd className="rounded border border-[var(--color-border)] px-1">↑↓←→</kbd> Auswahl/Cursor um 0,5 m bewegen
           </li>
           <li>
             <kbd className="rounded border border-[var(--color-border)] px-1">Umschalt</kbd>+
-            <kbd className="rounded border border-[var(--color-border)] px-1">←→</kbd> ganze Fläche verschieben
+            <kbd className="rounded border border-[var(--color-border)] px-1">↑↓←→</kbd> um 1 m. Ohne Auswahl verschiebt Umschalt+←→ die ganze Fläche
           </li>
           <li>
             <kbd className="rounded border border-[var(--color-border)] px-1">Enter</kbd> platzieren

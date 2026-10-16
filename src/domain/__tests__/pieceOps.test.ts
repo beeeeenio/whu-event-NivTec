@@ -204,5 +204,23 @@ describe('pieceOps', () => {
     it('ist für eine leere Auswahl immer ok', () => {
       expect(checkGroupMove(all, [], 5, 5)).toBe('ok');
     });
+
+    it('meldet out-of-bounds bei einem halben Schritt über den linken Rand (x=0)', () => {
+      const single: Piece2D[] = [{ id: 'a', x: 0, y: 0, w: 1, d: 1 }];
+      expect(checkGroupMove(single, ['a'], -0.5, 0)).toBe('out-of-bounds');
+    });
+
+    it('meldet collision bei einem halben Schritt auf ein Nachbarstück', () => {
+      const pair: Piece2D[] = [
+        { id: 'a', x: 0, y: 0, w: 1, d: 1 },
+        { id: 'b', x: 1, y: 0, w: 1, d: 1 },
+      ];
+      expect(checkGroupMove(pair, ['a'], 0.5, 0)).toBe('collision');
+    });
+
+    it('erlaubt einen Schritt von 1 m auf eine freie Fläche', () => {
+      const single: Piece2D[] = [{ id: 'a', x: 0, y: 0, w: 1, d: 1 }];
+      expect(checkGroupMove(single, ['a'], 1, 0)).toBe('ok');
+    });
   });
 });
