@@ -23,8 +23,14 @@ export function PlanFileBar({ namespace, currentData, onLoad, warnings, shareKin
   const [shareError, setShareError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  function handleExportFile() {
-    downloadTextFile(`nivtec-${namespace}.json`, JSON.stringify(currentData, null, 2), 'application/json;charset=utf-8');
+  const [fileName, setFileName] = useState<string | null>(null);
+
+  function confirmDownload() {
+    if (fileName === null) return;
+    // Verbotene Dateinamen-Zeichen entfernen, ".json" nur anhängen, wenn es noch fehlt.
+    const base = fileName.trim().replace(/[\\/:*?"<>|]+/g, '').replace(/\.json$/i, '') || `nivtec-${namespace}`;
+    downloadTextFile(`${base}.json`, JSON.stringify(currentData, null, 2), 'application/json;charset=utf-8');
+    setFileName(null);
   }
 
   async function handleShare() {
@@ -66,9 +72,45 @@ export function PlanFileBar({ namespace, currentData, onLoad, warnings, shareKin
       <button type="button" onClick={() => fileInputRef.current?.click()} className={ACTION_CLASS}>
         Plan-Datei öffnen
       </button>
-      <button type="button" onClick={handleExportFile} className={ACTION_CLASS}>
-        Plan-Datei herunterladen
-      </button>
+      {fileName === null ? (
+        <button type="button" onClick={() => setFileName(`nivtec-${namespace}`)} className={ACTION_CLASS}>
+          Plan-Datei herunterladen
+        </button>
+      ) : (
+        <form
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            confirmDownload();
+          }}
+        >
+          <label className="flex items-center gap-1.5 text-sm text-[var(--color-text)]">
+            Dateiname
+            <input
+              autoFocus
+              type="text"
+              value={fileName}
+              onChange={(e) => setFileName(e.target.value)}
+              onFocus={(e) => e.target.select()}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setFileName(null);
+              }}
+              aria-label="Dateiname für den Plan"
+              className="w-48 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm text-[var(--color-text)]"
+            />
+            <span className="text-xs text-[var(--color-text-muted)]">.json</span>
+          </label>
+          <button
+            type="submit"
+            className="px-3 py-1.5 rounded-md text-sm border border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
+          >
+            Herunterladen
+          </button>
+          <button type="button" onClick={() => setFileName(null)} className="text-xs text-[var(--color-text-muted)] underline">
+            Abbrechen
+          </button>
+        </form>
+      )}
       {shareKind && (
         <button type="button" onClick={() => void handleShare()} className={ACTION_CLASS}>
           Link teilen
