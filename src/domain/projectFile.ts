@@ -8,16 +8,26 @@ export interface ProjectFile {
   format: typeof PROJECT_FILE_FORMAT;
   version: 1;
   name: string;
-  tische: Array<{ name: string; kind: PlanKind; plan: unknown }>;
+  /** forexPrints: Druckbilder (Data-URLs) je Blenden-/Gruppen-Schlüssel — nur bei Bühnen mit Bildern. */
+  tische: Array<{ name: string; kind: PlanKind; plan: unknown; forexPrints?: Record<string, string> }>;
 }
 
 /** Baut die Projektdatei: alle Tische mit ihrem gespeicherten Plan (leere Tische ohne Plan als null). */
-export function buildProjectFile(project: Project, readDraft: (item: ProjectItem) => unknown): ProjectFile {
+export function buildProjectFile(
+  project: Project,
+  readDraft: (item: ProjectItem) => unknown,
+  prints: Record<string, Record<string, string>> = {},
+): ProjectFile {
   return {
     format: PROJECT_FILE_FORMAT,
     version: 1,
     name: project.name,
-    tische: project.items.map((item) => ({ name: item.name, kind: item.kind, plan: readDraft(item) ?? null })),
+    tische: project.items.map((item) => ({
+      name: item.name,
+      kind: item.kind,
+      plan: readDraft(item) ?? null,
+      ...(item.kind === 'kastenbuehne' && Object.keys(prints[item.id] ?? {}).length > 0 ? { forexPrints: prints[item.id] } : {}),
+    })),
   };
 }
 
@@ -57,8 +67,21 @@ export function parseProjectFile(data: unknown): ProjectFileResult {
       if (parsed.ok) plan = t.plan;
       else notes.push(`Plan von „${name}“ war nicht lesbar (${parsed.error}) – der Tisch startet leer.`);
     }
-    tische.push({ name, kind: t.kind, plan });
+    const prints = t.kind === 'kastenbuehne' ? readPrints(t.forexPrints) : {};
+    const dropped = t.forexPrints && typeof t.forexPrints === 'object' ? Object.keys(t.forexPrints).length - Object.keys(prints).length : 0;
+    if (dropped > 0) notes.push(`${dropped} Druckbild${dropped === 1 ? '' : 'er'} von „${name}“ ${dropped === 1 ? 'war' : 'waren'} ungültig und ${dropped === 1 ? 'wurde' : 'wurden'} übersprungen.`);
+    tische.push({ name, kind: t.kind, plan, ...(Object.keys(prints).length > 0 ? { forexPrints: prints } : {}) });
   });
   if (tische.length === 0) return { ok: false, error: 'Die Projektdatei enthält keinen brauchbaren Tisch.' };
   return { ok: true, name: typeof d.name === 'string' ? d.name : 'Importiertes Projekt', tische, notes };
+}
+
+/** Nur echte Bilddaten übernehmen — alles andere würde später als Bildquelle im Plan landen. */
+function readPrints(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (typeof raw !== 'object' || raw === null) return out;
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(value)) out[key] = value;
+  }
+  return out;
 }

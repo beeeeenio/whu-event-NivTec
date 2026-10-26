@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { buildProjectFile, parseProjectFile } from '../../domain/projectFile';
 import { readItemDraft } from '../../lib/projectStore';
+import { loadForexPrints } from '../../lib/forexPrintStore';
 import { downloadTextFile } from '../../lib/download';
 import { flushDrafts } from '../../hooks/useDraftAutosave';
 import { KIND_LABEL, type Project, type ProjectItem, type ProjectStore } from '../../domain/project';
@@ -25,7 +26,7 @@ interface Props {
     renameItem: (id: string, name: string) => void;
     deleteItem: (id: string) => void;
     duplicateItem: (id: string) => void;
-    importProject: (name: string, tische: Array<{ name: string; kind: PlanKind; plan: unknown }>) => void;
+    importProject: (name: string, tische: Array<{ name: string; kind: PlanKind; plan: unknown; forexPrints?: Record<string, string> }>) => Promise<void> | void;
   };
   saveFailed: boolean;
 }
@@ -42,11 +43,20 @@ export function ProjectBar({ store, project, activeItem, view, onView, actions, 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [fileMessage, setFileMessage] = useState<{ error: boolean; text: string } | null>(null);
 
-  function exportProject(fileName: string) {
+  async function exportProject(fileName: string) {
     flushDrafts();
     const base = fileName.trim().replace(/[\\/:*?"<>|]+/g, '').replace(/\.json$/i, '') || 'nivtec-projekt';
-    downloadTextFile(`${base}.json`, JSON.stringify(buildProjectFile(project, readItemDraft), null, 2), 'application/json;charset=utf-8');
-    setFileMessage({ error: false, text: `Projekt „${project.name}“ mit ${project.items.length} ${project.items.length === 1 ? 'Tisch' : 'Tischen'} gespeichert. Forex-Druckbilder sind nicht enthalten.` });
+    const prints: Record<string, Record<string, string>> = {};
+    await Promise.all(
+      project.items.filter((i) => i.kind === 'kastenbuehne').map(async (i) => { prints[i.id] = await loadForexPrints(i.namespace); }),
+    );
+    const file = buildProjectFile(project, readItemDraft, prints);
+    downloadTextFile(`${base}.json`, JSON.stringify(file, null, 2), 'application/json;charset=utf-8');
+    const imageCount = file.tische.reduce((n, t) => n + Object.keys(t.forexPrints ?? {}).length, 0);
+    setFileMessage({
+      error: false,
+      text: `Projekt „${project.name}“ mit ${project.items.length} ${project.items.length === 1 ? 'Tisch' : 'Tischen'} gespeichert${imageCount > 0 ? `, inklusive ${imageCount} Forex-Druckbild${imageCount === 1 ? '' : 'ern'}` : ''}.`,
+    });
     stop();
   }
 
@@ -66,7 +76,7 @@ export function ProjectBar({ store, project, activeItem, view, onView, actions, 
       setFileMessage({ error: true, text: result.error });
       return;
     }
-    actions.importProject(result.name, result.tische);
+    await actions.importProject(result.name, result.tische);
     onView('item');
     setFileMessage({
       error: false,

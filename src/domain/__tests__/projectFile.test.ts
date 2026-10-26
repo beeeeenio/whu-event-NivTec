@@ -56,6 +56,38 @@ describe('Projektdatei', () => {
   });
 });
 
+describe('Forex-Druckbilder in der Projektdatei', () => {
+  const img = 'data:image/jpeg;base64,/9j/4AAQ';
+
+  it('Rundreise: Bilder der Bühne werden mitgenommen, Tresen und leere Bühnen bekommen keine', () => {
+    const project = getActiveProject(createDefaultStore());
+    const [b, t] = project.items;
+    const file = buildProjectFile(project, () => null, { [b.id]: { 'g1': img }, [t.id]: { 'x': img } });
+    expect(file.tische[0].forexPrints).toEqual({ g1: img });
+    expect(file.tische[1].forexPrints).toBeUndefined();
+    const parsed = parseProjectFile(JSON.parse(JSON.stringify(file)));
+    expect(parsed.ok && parsed.tische[0].forexPrints).toEqual({ g1: img });
+  });
+
+  it('ohne Bilder bleibt das Feld weg', () => {
+    const project = getActiveProject(createDefaultStore());
+    const file = buildProjectFile(project, () => null, { [project.items[0].id]: {} });
+    expect(file.tische[0]).not.toHaveProperty('forexPrints');
+  });
+
+  it('verwirft Einträge, die keine Bilddaten sind, und meldet es', () => {
+    const parsed = parseProjectFile({
+      format: 'nivtec-projekt',
+      version: 1,
+      tische: [{ name: 'B', kind: 'kastenbuehne', plan: null, forexPrints: { ok: img, bad: 'javascript:alert(1)', svg: 'data:image/svg+xml;base64,AAAA' } }],
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.tische[0].forexPrints).toEqual({ ok: img });
+    expect(parsed.notes[0]).toContain('2 Druckbilder');
+  });
+});
+
 describe('addImportedProject', () => {
   it('legt ein neues aktives Projekt mit frischen Speicherorten an', () => {
     const store = createDefaultStore();

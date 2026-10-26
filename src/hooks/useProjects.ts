@@ -16,6 +16,7 @@ import {
   type ProjectStore,
 } from '../domain/project';
 import type { PlanKind } from '../domain/migrations';
+import { saveForexPrints } from '../lib/forexPrintStore';
 import { copyItemData, deleteItemData, loadProjectStore, saveProjectStore, writeItemDraft } from '../lib/projectStore';
 import type { ProjectFile } from '../domain/projectFile';
 import { flushDrafts } from './useDraftAutosave';
@@ -69,7 +70,7 @@ export function useProjects() {
       void copyItemData(source, item);
       commit(next);
     },
-    importProject: (name: string, tische: ProjectFile['tische']) => {
+    importProject: async (name: string, tische: ProjectFile['tische']) => {
       const { store: next, items } = addImportedProject(
         storeRef.current,
         name,
@@ -78,6 +79,8 @@ export function useProjects() {
       items.forEach((item, i) => {
         if (tische[i].plan !== null) writeItemDraft(item, tische[i].plan);
       });
+      // Bilder vor dem Öffnen des Tisches speichern — er lädt sie beim Einhängen.
+      await Promise.all(items.map((item, i) => (tische[i].forexPrints ? saveForexPrints(item.namespace, tische[i].forexPrints!) : null)));
       commit(next);
     },
     /** Für geteilte Links: aktiv wird der erste Tisch dieser Art, sonst entsteht einer. */
