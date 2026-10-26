@@ -168,3 +168,22 @@ export function parseStore(raw: unknown): ProjectStore | null {
   const activeProjectId = typeof r.activeProjectId === 'string' && projects.some((p) => p.id === r.activeProjectId) ? r.activeProjectId : projects[0].id;
   return { version: 1, activeProjectId, projects };
 }
+
+/** Neues Projekt aus importierten Tischen (neue IDs und Speicherorte); wird sofort aktiv. */
+export function addImportedProject(
+  store: ProjectStore,
+  name: string,
+  items: Array<{ name: string; kind: PlanKind }>,
+): { store: ProjectStore; items: ProjectItem[] } {
+  const made: ProjectItem[] = items.map((i) => {
+    const id = makeId();
+    return { id, name: cleanName(i.name, i.kind === 'tresen' ? 'Tresen' : 'Bühne'), kind: i.kind, namespace: `item-${id}` };
+  });
+  const project: Project = {
+    id: makeId(),
+    name: cleanName(name, `Projekt ${store.projects.length + 1}`),
+    items: made,
+    activeItemId: made[0]?.id ?? null,
+  };
+  return { store: { ...store, projects: [...store.projects, project], activeProjectId: project.id }, items: made };
+}

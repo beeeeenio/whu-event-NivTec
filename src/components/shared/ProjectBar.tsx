@@ -1,4 +1,8 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { buildProjectFile, parseProjectFile } from '../../domain/projectFile';
+import { readItemDraft } from '../../lib/projectStore';
+import { downloadTextFile } from '../../lib/download';
+import { flushDrafts } from '../../hooks/useDraftAutosave';
 import { KIND_LABEL, type Project, type ProjectItem, type ProjectStore } from '../../domain/project';
 import type { PlanKind } from '../../domain/migrations';
 import { NameInput } from './NameInput';
@@ -21,6 +25,7 @@ interface Props {
     renameItem: (id: string, name: string) => void;
     deleteItem: (id: string) => void;
     duplicateItem: (id: string) => void;
+    importProject: (name: string, tische: Array<{ name: string; kind: PlanKind; plan: unknown }>) => void;
   };
   saveFailed: boolean;
 }
@@ -28,12 +33,46 @@ interface Props {
 const SMALL_BTN =
   'px-2 py-1 rounded-md text-xs border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] hover:border-[var(--color-accent)]';
 
-type Editing = 'none' | 'newProject' | 'renameProject' | 'renameItem' | 'addItem';
+type Editing = 'none' | 'newProject' | 'renameProject' | 'renameItem' | 'addItem' | 'exportProject';
 
 /** Projektauswahl und Tisch-Reiter inklusive "Gesamtliste". */
 export function ProjectBar({ store, project, activeItem, view, onView, actions, saveFailed }: Props) {
   const [editing, setEditing] = useState<Editing>('none');
   const stop = () => setEditing('none');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [fileMessage, setFileMessage] = useState<{ error: boolean; text: string } | null>(null);
+
+  function exportProject(fileName: string) {
+    flushDrafts();
+    const base = fileName.trim().replace(/[\\/:*?"<>|]+/g, '').replace(/\.json$/i, '') || 'nivtec-projekt';
+    downloadTextFile(`${base}.json`, JSON.stringify(buildProjectFile(project, readItemDraft), null, 2), 'application/json;charset=utf-8');
+    setFileMessage({ error: false, text: `Projekt „${project.name}“ mit ${project.items.length} ${project.items.length === 1 ? 'Tisch' : 'Tischen'} gespeichert. Forex-Druckbilder sind nicht enthalten.` });
+    stop();
+  }
+
+  async function importProjectFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // dieselbe Datei muss sich später erneut wählen lassen
+    if (!file) return;
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(await file.text());
+    } catch {
+      setFileMessage({ error: true, text: 'Datei konnte nicht gelesen werden — ist es eine NivTec-Projektdatei?' });
+      return;
+    }
+    const result = parseProjectFile(parsedJson);
+    if (!result.ok) {
+      setFileMessage({ error: true, text: result.error });
+      return;
+    }
+    actions.importProject(result.name, result.tische);
+    onView('item');
+    setFileMessage({
+      error: false,
+      text: `Projekt „${result.name}“ importiert (${result.tische.length} ${result.tische.length === 1 ? 'Tisch' : 'Tische'}).${result.notes.length > 0 ? ' ' + result.notes.join(' ') : ''}`,
+    });
+  }
 
   return (
     <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)]">
@@ -50,6 +89,14 @@ export function ProjectBar({ store, project, activeItem, view, onView, actions, 
                 onView('item');
                 stop();
               }}
+              onCancel={stop}
+            />
+          ) : editing === 'exportProject' ? (
+            <NameInput
+              initial={project.name}
+              label="Dateiname der Projektdatei"
+              confirmLabel="Herunterladen"
+              onConfirm={exportProject}
               onCancel={stop}
             />
           ) : editing === 'renameProject' ? (
@@ -85,6 +132,12 @@ export function ProjectBar({ store, project, activeItem, view, onView, actions, 
               <button type="button" className={SMALL_BTN} onClick={() => setEditing('renameProject')}>
                 Umbenennen
               </button>
+              <button type="button" className={SMALL_BTN} onClick={() => setEditing('exportProject')}>
+                Exportieren
+              </button>
+              <button type="button" className={SMALL_BTN} onClick={() => fileInputRef.current?.click()}>
+                Importieren
+              </button>
               <button
                 type="button"
                 className={`${SMALL_BTN} hover:!border-[var(--color-danger)] hover:!text-[var(--color-danger)]`}
@@ -99,12 +152,22 @@ export function ProjectBar({ store, project, activeItem, view, onView, actions, 
               </button>
             </>
           )}
+          <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={importProjectFile} className="hidden" />
           {saveFailed && (
             <span role="alert" className="text-xs text-[var(--color-danger)]">
               Projekte konnten nicht im Browser gespeichert werden.
             </span>
           )}
         </div>
+
+        {fileMessage && (
+          <p role="status" className={`text-xs ${fileMessage.error ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-muted)]'}`}>
+            {fileMessage.text}{' '}
+            <button type="button" onClick={() => setFileMessage(null)} className="underline">
+              Schließen
+            </button>
+          </p>
+        )}
 
         <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Tische">
           {project.items.map((item) => {

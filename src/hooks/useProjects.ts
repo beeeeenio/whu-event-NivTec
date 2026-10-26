@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  addImportedProject,
   addItem,
   addProject,
   getActiveItem,
@@ -15,7 +16,8 @@ import {
   type ProjectStore,
 } from '../domain/project';
 import type { PlanKind } from '../domain/migrations';
-import { copyItemData, deleteItemData, loadProjectStore, saveProjectStore } from '../lib/projectStore';
+import { copyItemData, deleteItemData, loadProjectStore, saveProjectStore, writeItemDraft } from '../lib/projectStore';
+import type { ProjectFile } from '../domain/projectFile';
 import { flushDrafts } from './useDraftAutosave';
 
 /** Projekte mit Tischen: wird bei jeder Änderung im Browser gespeichert. */
@@ -65,6 +67,17 @@ export function useProjects() {
       flushDrafts();
       const { store: next, item } = addItem(storeRef.current, current.id, source.kind, `${source.name} (Kopie)`);
       void copyItemData(source, item);
+      commit(next);
+    },
+    importProject: (name: string, tische: ProjectFile['tische']) => {
+      const { store: next, items } = addImportedProject(
+        storeRef.current,
+        name,
+        tische.map((t) => ({ name: t.name, kind: t.kind })),
+      );
+      items.forEach((item, i) => {
+        if (tische[i].plan !== null) writeItemDraft(item, tische[i].plan);
+      });
       commit(next);
     },
     /** Für geteilte Links: aktiv wird der erste Tisch dieser Art, sonst entsteht einer. */

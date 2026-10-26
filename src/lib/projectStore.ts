@@ -60,3 +60,12 @@ export async function copyItemData(from: ProjectItem, to: ProjectItem): Promise<
   const prints = await loadForexPrints(from.namespace);
   if (Object.keys(prints).length > 0) await saveForexPrints(to.namespace, prints);
 }
+
+/** Schreibt einen importierten Plan als Entwurf des Tisches (er wird beim Öffnen des Tisches geladen). */
+export function writeItemDraft(item: ProjectItem, plan: unknown): void {
+  try {
+    localStorage.setItem(draftStorageKey(item.namespace), JSON.stringify(plan));
+  } catch {
+    // Speicher voll oder gesperrt: der Tisch startet leer
+  }
+}
