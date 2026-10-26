@@ -3,17 +3,10 @@ import { KastenbuehneConfigurator } from './modules/kastenbuehne/KastenbuehneCon
 import { TresenConfigurator } from './modules/tresen/TresenConfigurator';
 import type { CiId } from './lib/ci';
 import type { PlanKind } from './domain/migrations';
+import { ProjectBar, type ProjectView } from './components/shared/ProjectBar';
+import { ProjectMaterialView } from './components/shared/ProjectMaterialView';
+import { useProjects } from './hooks/useProjects';
 import { decodePlanToken, readShareToken } from './lib/planShare';
-
-// Tisch/Tribüne (und die alte reglerbasierte Bühne) sind bewusst aus der App entfernt,
-// aber nicht gelöscht — die Dateien liegen weiter unter _archive/modules/{tisch,tribuene,buehne}/
-// und kompilieren nicht mehr gegen die aktuelle API.
-type TabId = 'buehne' | 'tresen';
-
-const TABS: Array<{ id: TabId; label: string }> = [
-  { id: 'buehne', label: 'Bühne' },
-  { id: 'tresen', label: 'Tresen / Theken' },
-];
 
 // Jeder Techie einer WHU-Initiative (forumWHU, Campus for Finance, ...) ist gleichzeitig Teil
 // von WHU Event — das Tool wird deshalb von mehreren Initiativen genutzt, mit je eigener CI,
@@ -26,8 +19,6 @@ interface SharedPlan {
   data: unknown;
 }
 
-/** Tab, in dem ein geteilter Plan geöffnet wird. */
-const SHARED_TAB: Record<PlanKind, TabId> = { kastenbuehne: 'buehne', tresen: 'tresen' };
 const CIS: Array<{ id: CiId; label: string }> = [
   { id: 'forumwhu', label: 'forum WHU' },
   { id: 'cff', label: 'Campus for Finance' },
@@ -134,7 +125,11 @@ function CiLogo({ id, activeCi }: { id: CiId; activeCi: CiId }) {
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<TabId>('buehne');
+  const { store, project, activeItem, saveFailed, actions } = useProjects();
+  const [view, setView] = useState<ProjectView>('item');
+  // Der Link-Effekt unten läuft nur einmal, braucht aber immer die aktuellen Aktionen.
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
   const [ci, setCi] = useState<CiId>(() => {
     const saved = localStorage.getItem(CI_STORAGE_KEY);
     return saved === 'cff' || saved === 'whuevent' || saved === 'sensability' || saved === 'cscm'
@@ -171,7 +166,8 @@ function App() {
       }
       setShared({ kind: decoded.kind, data: decoded.data });
       setShareError(null);
-      setActiveTab(SHARED_TAB[decoded.kind]);
+      actionsRef.current.openKind(decoded.kind);
+      setView('item');
     }
     void loadSharedFromHash();
     window.addEventListener('hashchange', loadSharedFromHash);
@@ -223,26 +219,15 @@ function App() {
         </div>
       </header>
 
-      <nav className="border-b border-[var(--color-border)] bg-[var(--color-surface)]" role="tablist">
-        <div className="max-w-4xl mx-auto px-4 flex gap-1 overflow-x-auto">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
-                activeTab === tab.id
-                  ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
-                  : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </nav>
+      <ProjectBar
+        store={store}
+        project={project}
+        activeItem={activeItem}
+        view={view}
+        onView={setView}
+        actions={actions}
+        saveFailed={saveFailed}
+      />
 
       <main className="max-w-4xl mx-auto px-4 py-6">
         {shareError && (
@@ -256,20 +241,31 @@ function App() {
             </button>
           </div>
         )}
-        <div hidden={activeTab !== 'buehne'}>
+        {view === 'total' ? (
+          <ProjectMaterialView project={project} />
+        ) : activeItem === null ? (
+          <p className="text-sm text-[var(--color-text-muted)]">
+            Dieses Projekt hat noch keinen Tisch. Oben über „+ Tisch hinzufügen“ einen anlegen.
+          </p>
+        ) : activeItem.kind === 'kastenbuehne' ? (
           <KastenbuehneConfigurator
+            key={activeItem.id}
             ci={ci}
+            namespace={activeItem.namespace}
+            title={activeItem.name}
             shared={shared?.kind === 'kastenbuehne' ? shared.data : undefined}
             onLeaveShared={leaveShared}
           />
-        </div>
-        <div hidden={activeTab !== 'tresen'}>
+        ) : (
           <TresenConfigurator
+            key={activeItem.id}
             ci={ci}
+            namespace={activeItem.namespace}
+            title={activeItem.name}
             shared={shared?.kind === 'tresen' ? shared.data : undefined}
             onLeaveShared={leaveShared}
           />
-        </div>
+        )}
       </main>
 
       <footer className="max-w-4xl mx-auto px-4 py-6 text-xs text-[var(--color-text-muted)]">

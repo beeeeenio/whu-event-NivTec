@@ -5,6 +5,8 @@ import { buildShareUrl, encodePlanToken, SHARE_URL_WARN_LENGTH } from '../../lib
 
 interface Props {
   namespace: string;
+  /** Vorschlag für den Dateinamen (z. B. Name des Tisches); ohne Angabe nivtec-<namespace>. */
+  fileBase?: string;
   currentData: unknown;
   onLoad: (data: unknown) => string | null;
   /** Import-Bericht des letzten Ladens (z. B. verworfene Stücke) — optional. */
@@ -16,7 +18,7 @@ interface Props {
 const ACTION_CLASS =
   'px-3 py-1.5 rounded-md text-sm border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] hover:border-[var(--color-accent)]';
 
-export function PlanFileBar({ namespace, currentData, onLoad, warnings, shareKind }: Props) {
+export function PlanFileBar({ namespace, fileBase, currentData, onLoad, warnings, shareKind }: Props) {
   const [importError, setImportError] = useState<string | null>(null);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [shareCopied, setShareCopied] = useState(false);
@@ -24,11 +26,12 @@ export function PlanFileBar({ namespace, currentData, onLoad, warnings, shareKin
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [fileName, setFileName] = useState<string | null>(null);
+  const defaultName = fileBase?.trim() || `nivtec-${namespace}`;
 
   function confirmDownload() {
     if (fileName === null) return;
     // Verbotene Dateinamen-Zeichen entfernen, ".json" nur anhängen, wenn es noch fehlt.
-    const base = fileName.trim().replace(/[\\/:*?"<>|]+/g, '').replace(/\.json$/i, '') || `nivtec-${namespace}`;
+    const base = fileName.trim().replace(/[\\/:*?"<>|]+/g, '').replace(/\.json$/i, '') || defaultName;
     downloadTextFile(`${base}.json`, JSON.stringify(currentData, null, 2), 'application/json;charset=utf-8');
     setFileName(null);
   }
@@ -73,7 +76,7 @@ export function PlanFileBar({ namespace, currentData, onLoad, warnings, shareKin
         Plan-Datei öffnen
       </button>
       {fileName === null ? (
-        <button type="button" onClick={() => setFileName(`nivtec-${namespace}`)} className={ACTION_CLASS}>
+        <button type="button" onClick={() => setFileName(defaultName)} className={ACTION_CLASS}>
           Plan-Datei herunterladen
         </button>
       ) : (

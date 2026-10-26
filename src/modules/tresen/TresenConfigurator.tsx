@@ -94,10 +94,15 @@ export function TresenConfigurator({
   ci,
   shared,
   onLeaveShared,
+  namespace = 'tresen',
+  title = 'Tresen',
 }: {
   ci: CiId;
   shared?: unknown;
   onLeaveShared?: () => void;
+  /** Speicherort dieses Plans (Entwurf, Stände) — je Tisch im Projekt verschieden. */
+  namespace?: string;
+  title?: string;
 }) {
   const [resultTab, setResultTab] = useState<ResultTab>('kennzahlen');
   // Maßketten im Grundriss und in der PPTX (Standard: an).
@@ -297,7 +302,7 @@ export function TresenConfigurator({
     ...(own.annotations.length > 0 ? { annotations: own.annotations } : {}),
   };
   const { restored, discard, saveError, otherTabChanged, reloadFromOtherTab, dismissOtherTab } = useDraftAutosave(
-    'tresen',
+    namespace,
     currentSavedState,
     applySavedState,
   );
@@ -311,9 +316,10 @@ export function TresenConfigurator({
     <div className="space-y-6">
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-[var(--color-text)]">Aufbau</h2>
+          <h2 className="text-lg font-semibold text-[var(--color-text)]">{title}</h2>
           <PlanFileBar
-            namespace="tresen"
+            namespace={namespace}
+            fileBase={title}
             currentData={currentSavedState}
             onLoad={applyOwnState}
             shareKind="tresen"
@@ -667,7 +673,7 @@ export function TresenConfigurator({
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold text-[var(--color-text)]">Im Browser gespeichert</h2>
-        <SavedConfigsPanel namespace="tresen" currentData={currentSavedState} onLoad={applyOwnState} />
+        <SavedConfigsPanel namespace={namespace} currentData={currentSavedState} onLoad={applyOwnState} />
       </section>
     </div>
   );

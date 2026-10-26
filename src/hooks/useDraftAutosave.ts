@@ -3,6 +3,12 @@ import { describeStorageError } from '../lib/storageErrors';
 
 const DEBOUNCE_MS = 500;
 
+/** Fordert alle offenen Entwürfe auf, ausstehende Änderungen sofort zu schreiben. */
+export const FLUSH_DRAFTS_EVENT = 'nivtec:flush-drafts';
+export function flushDrafts(): void {
+  window.dispatchEvent(new Event(FLUSH_DRAFTS_EVENT));
+}
+
 export function draftStorageKey(namespace: string): string {
   return `nivtec:draft:${namespace}`;
 }
@@ -94,6 +100,25 @@ export function useDraftAutosave(namespace: string, currentData: unknown, onLoad
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('pagehide', onPageHide);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [namespace]);
+
+  // Von außen angestoßenes Sichern (z. B. vor dem Duplizieren eines Tisches im Projekt).
+  useEffect(() => {
+    function onFlush() {
+      if (dirtyRef.current) writeNow();
+    }
+    window.addEventListener(FLUSH_DRAFTS_EVENT, onFlush);
+    return () => window.removeEventListener(FLUSH_DRAFTS_EVENT, onFlush);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [namespace]);
+
+  // Beim Verlassen (z. B. Wechsel zu einem anderen Tisch im Projekt) sofort sichern, sonst ginge die
+  // Änderung der letzten halben Sekunde verloren.
+  useEffect(() => {
+    return () => {
+      if (dirtyRef.current) writeNow();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [namespace]);

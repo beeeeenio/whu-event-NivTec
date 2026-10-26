@@ -55,10 +55,15 @@ export function KastenbuehneConfigurator({
   ci,
   shared,
   onLeaveShared,
+  namespace = 'kastenbuehne',
+  title = 'Kastenbühne',
 }: {
   ci: CiId;
   shared?: unknown;
   onLeaveShared?: () => void;
+  /** Speicherort dieses Plans (Entwurf, Stände, Forex-Drucke) — je Tisch im Projekt verschieden. */
+  namespace?: string;
+  title?: string;
 }) {
   const [resultTab, setResultTab] = useState<ResultTab>('kennzahlen');
   // Maßketten im Grundriss und in der PPTX (Standard: an).
@@ -140,7 +145,7 @@ export function KastenbuehneConfigurator({
   const printsLoadedRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
-    loadForexPrints('kastenbuehne').then((stored) => {
+    loadForexPrints(namespace).then((stored) => {
       if (cancelled) return;
       printsLoadedRef.current = true;
       setForexPrints((prev) => ({ ...stored, ...prev }));
@@ -151,7 +156,7 @@ export function KastenbuehneConfigurator({
   }, []);
   useEffect(() => {
     if (!printsLoadedRef.current) return;
-    void saveForexPrints('kastenbuehne', forexPrints);
+    void saveForexPrints(namespace, forexPrints);
   }, [forexPrints]);
   // Drucke entfernter Blenden fallen weg (Blenden an gerade belegten Kanten behalten ihren Druck).
   // Im geteilten Plan gibt es keine Drucke: die gehören zum eigenen Entwurf.
@@ -255,7 +260,7 @@ export function KastenbuehneConfigurator({
     setForexPanels((prev) => toggleForexPanel(prev, pieceId, side));
   }
   const { restored, discard, saveError, otherTabChanged, reloadFromOtherTab, dismissOtherTab } = useDraftAutosave(
-    'kastenbuehne',
+    namespace,
     currentSavedState,
     applySavedState,
   );
@@ -264,9 +269,10 @@ export function KastenbuehneConfigurator({
     <div className="space-y-6">
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-[var(--color-text)]">Kastenbühne</h2>
+          <h2 className="text-lg font-semibold text-[var(--color-text)]">{title}</h2>
           <PlanFileBar
-            namespace="kastenbuehne"
+            namespace={namespace}
+            fileBase={title}
             currentData={currentSavedState}
             onLoad={applyOwnState}
             shareKind="kastenbuehne"
@@ -554,7 +560,7 @@ export function KastenbuehneConfigurator({
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold text-[var(--color-text)]">Im Browser gespeichert</h2>
-        <SavedConfigsPanel namespace="kastenbuehne" currentData={currentSavedState} onLoad={applyOwnState} />
+        <SavedConfigsPanel namespace={namespace} currentData={currentSavedState} onLoad={applyOwnState} />
       </section>
     </div>
   );
